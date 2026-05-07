@@ -1,0 +1,16 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+docs/
+dist/
+persist/
+logs/
+_archive/
+RELEASE_PATCH.patch
+RELEASE_edition.py.txt
+RELEASE_env.example.txt
+RELEASE_PLAN.md
+trainer.db

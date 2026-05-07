@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>行内填空渲染测试</title>
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="assets/components.css?v=20260426-19">
+<style>
+body { padding: 24px; max-width: 900px; margin: 0 auto; }
+.demo { margin: 16px 0; padding: 12px; border: 1px solid #ccc; border-radius: 4px; }
+.demo h3 { margin: 0 0 8px; font-size: 0.95rem; color: #555; }
+.expected { color: #888; font-size: 0.85rem; font-family: monospace; margin: 4px 0 8px; }
+</style>
+</head>
+<body>
+<h1>行内填空渲染测试（不需要登录）</h1>
+<p>如果下面 4 个 demo 都看到 <strong>给定文本 + 黄色边框小输入框</strong> 同行排布，说明前端渲染没问题；如果还是整行，说明 CSS/JS 没生效。</p>
+<div id="root"></div>
+<script type="module">
+import { createCell } from './assets/components/jupyter-cell.js?v=20260426-3';
+
+const cases = [
+  {
+    title: 'q1 #0 单空 — data = ___',
+    segments: [
+      { type: 'given', code: 'import pandas as pd\nimport numpy as np' },
+      { type: 'blank', hint: '读取数据集', blankIndex: 0,
+        template: 'data = _____________' },
+    ],
+  },
+  {
+    title: 'q1 #1 三空一行 — ___ = ___(...)',
+    segments: [
+      { type: 'given', code: '# 1. 统计住院天数超过7天的患者数量及其占比' },
+      { type: 'blank', hint: '创建 RiskLevel 列', blankIndex: 0,
+        template: "_____________ = _____________(_____________, '高风险患者', '低风险患者')" },
+    ],
+  },
+  {
+    title: 'q27 #1 单空在中间 — image = ___(\'L\')',
+    segments: [
+      { type: 'given', code: 'import onnxruntime' },
+      { type: 'blank', hint: '加载图像', blankIndex: 0,
+        template: "image = _________________('L')  # 转为灰度图" },
+    ],
+  },
+  {
+    title: 'q5 #4 多行多空（between filter）',
+    segments: [
+      { type: 'given', code: '# 处理异常值' },
+      { type: 'blank', hint: '处理异常值', blankIndex: 0,
+        template:
+          'data = data[(_____________(18, 70))  & \n' +
+          '            (_____________(0, 200)) & \n' +
+          '            (_____________(1, 1000)) & \n' +
+          '            (_____________(1, 1440))]' },
+    ],
+  },
+];
+
+const root = document.getElementById('root');
+cases.forEach((c, i) => {
+  const wrap = document.createElement('div');
+  wrap.className = 'demo';
+  const h = document.createElement('h3');
+  h.textContent = c.title;
+  wrap.appendChild(h);
+  const expected = document.createElement('div');
+  expected.className = 'expected';
+  expected.textContent = '期望：模板文本是浅灰背景，___ 处是黄色边框输入框，同一行排列。';
+  wrap.appendChild(expected);
+
+  const cell = createCell({
+    id: 'demo-' + i,
+    index: ' ',
+    segments: c.segments,
+    initialBlanks: {},
+    onBlankInput: (idx, val) => {
+      console.log('input', idx, '=', val);
+    },
+    onRun: () => {},
+  });
+  wrap.appendChild(cell);
+  root.appendChild(wrap);
+});
+</script>
+</body>
+</html>

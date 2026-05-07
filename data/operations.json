@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1,
+    "title": "客户流失样例数据分析",
+    "category": "示例操作题",
+    "time_limit": "20min",
+    "total_score": 10,
+    "type": "code",
+    "scenario": "你拿到一份示例客户数据 customer_churn_sample.csv，需要用 Python 完成基础统计，判断不同客户群体的流失情况。本题只用于演示开源系统的操作题工作流。",
+    "tasks": [
+      {"num": 1, "text": "读取 customer_churn_sample.csv。"},
+      {"num": 2, "text": "统计样本总数和流失客户数量。"},
+      {"num": 3, "text": "按 plan 字段计算平均 monthly_spend。"}
+    ],
+    "rubric": [
+      {"id": "M1", "points": 2, "desc": "能够正确读取 CSV 文件"},
+      {"id": "M2", "points": 4, "desc": "能够输出样本总数和流失数量"},
+      {"id": "M3", "points": 4, "desc": "能够按套餐分组计算平均消费"}
+    ],
+    "code_segments": [
+      {"type": "given", "code": "import pandas as pd\n\n"},
+      {
+        "type": "blank",
+        "hint": "读取 CSV",
+        "template": "df = ________________________________",
+        "answer": "df = pd.read_csv('customer_churn_sample.csv')",
+        "points": 2
+      },
+      {"type": "given", "code": "\nprint(df.head())\n\n"},
+      {
+        "type": "blank",
+        "hint": "统计总样本数",
+        "template": "total = _______",
+        "answer": "total = len(df)",
+        "points": 2
+      },
+      {"type": "given", "code": "\n"},
+      {
+        "type": "blank",
+        "hint": "统计流失客户数量",
+        "template": "churned = ________________________________",
+        "answer": "churned = int(df['churned'].sum())",
+        "points": 2
+      },
+      {"type": "given", "code": "\nprint('total:', total)\nprint('churned:', churned)\n\n"},
+      {
+        "type": "blank",
+        "hint": "按套餐计算平均消费",
+        "template": "avg_spend = __________________________________________",
+        "answer": "avg_spend = df.groupby('plan')['monthly_spend'].mean()",
+        "points": 4
+      },
+      {"type": "given", "code": "\nprint(avg_spend)\n"}
+    ],
+    "answer_sections": [
+      {
+        "type": "code",
+        "content": "df = pd.read_csv('customer_churn_sample.csv')\ntotal = len(df)\nchurned = int(df['churned'].sum())\navg_spend = df.groupby('plan')['monthly_spend'].mean()"
+      }
+    ]
+  }
+]

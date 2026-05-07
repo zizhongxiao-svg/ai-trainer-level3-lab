@@ -1,0 +1,39 @@
+[
+  {
+    "id": 1,
+    "type": "judge",
+    "category": "AI 基础",
+    "text": "监督学习通常需要带标签的数据。",
+    "options": [
+      {"label": "√", "text": "正确"},
+      {"label": "×", "text": "错误"}
+    ],
+    "answer": ["√"]
+  },
+  {
+    "id": 2,
+    "type": "single",
+    "category": "AI 基础",
+    "text": "下列哪一项更适合用于评估分类模型？",
+    "options": [
+      {"label": "A", "text": "准确率"},
+      {"label": "B", "text": "圆周率"},
+      {"label": "C", "text": "文件大小"},
+      {"label": "D", "text": "屏幕分辨率"}
+    ],
+    "answer": ["A"]
+  },
+  {
+    "id": 3,
+    "type": "multi",
+    "category": "数据处理",
+    "text": "训练模型前常见的数据处理步骤包括哪些？",
+    "options": [
+      {"label": "A", "text": "处理缺失值"},
+      {"label": "B", "text": "检查异常值"},
+      {"label": "C", "text": "划分训练集和测试集"},
+      {"label": "D", "text": "删除所有数据"}
+    ],
+    "answer": ["A", "B", "C"]
+  }
+]

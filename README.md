@@ -13,6 +13,16 @@ AI Trainer Level 3 Lab 是一个面向 **人工智能训练师三级** 备考的
 
 本公开仓库不包含私有部署配置、私有授权标识、公众号关注门禁、内部 AI 判卷 worker、生产 IP、本地机器路径、token、班级名单、学员记录、SQLite 运行数据库或日志。
 
+## Screenshots
+
+| 理论题训练 | 操作题列表 |
+|---|---|
+| ![Theory practice](docs/screenshots/theory-practice.png) | ![Operation list](docs/screenshots/operation-list.png) |
+
+| 模拟考试 | 代码题工作区 |
+|---|---|
+| ![Mock exam](docs/screenshots/mock-exam.png) | ![Code workspace](docs/screenshots/code-workspace.png) |
+
 ## Quick Start
 
 推荐使用 Docker 方式运行，Windows、macOS、Linux 都一致。

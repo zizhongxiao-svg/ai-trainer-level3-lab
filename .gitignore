@@ -9,6 +9,7 @@ logs/
 persist/
 dist/
 _archive/
+image/
 *.pkl
 *.joblib
 *.zip

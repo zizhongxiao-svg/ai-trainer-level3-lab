@@ -19,4 +19,5 @@ HOST_PORT="$(awk -F= '/^HOST_PORT=/{print $2; exit}' .env 2>/dev/null || true)"
 HOST_PORT="${HOST_PORT:-8097}"
 echo
 echo "AI Trainer Level 3 Lab 已启动： http://localhost:${HOST_PORT}"
+echo "历史记录保存在当前目录的 persist/ 中，请勿删除该目录。"
 command -v xdg-open >/dev/null 2>&1 && xdg-open "http://localhost:${HOST_PORT}" >/dev/null 2>&1 || true

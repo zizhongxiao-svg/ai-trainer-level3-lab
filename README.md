@@ -113,6 +113,18 @@ docker compose down
 
 如果只是使用离线包，启动脚本会先导入 `ai-trainer-level3-lab.tar.gz`，再执行 `docker compose up -d`。
 
+如果你自己写 `docker run` 命令，也必须挂载持久化目录：
+
+```bash
+docker run -d \
+  --name ai-trainer \
+  -p 8097:8097 \
+  -e TRAINER_DB_PATH=/app/persist/trainer.db \
+  -e TRAINER_DATA_DIR=/app/persist \
+  -v "$PWD/persist:/app/persist" \
+  ai-trainer-level3-lab:latest
+```
+
 ## How To Use
 
 ### 理论题练习
@@ -150,7 +162,60 @@ Docker 运行时，本地数据默认保存在：
 persist/trainer.db
 ```
 
-删除这个文件会清空本地账号和答题记录。不要把 `persist/` 提交到 Git。
+同时会在同一目录生成：
+
+```text
+persist/secret.key
+```
+
+`trainer.db` 保存账号、理论题记录、操作题草稿、提交记录和进度；`secret.key` 用于保持登录 token 的签名稳定。
+
+关闭系统不会清空数据：
+
+```bash
+docker compose down
+docker compose up
+```
+
+只要你仍然在同一个项目目录里启动，历史记录会继续保留。
+
+会变成“全新系统”的常见原因：
+
+- 删除了 `persist/` 或 `persist/trainer.db`
+- 每次都重新解压到一个新目录启动
+- 从另一个 clone 目录启动
+- 手动修改了 `TRAINER_DB_PATH`
+- 使用了没有挂载 `/app/persist` 的自定义 `docker run`
+
+不要把 `persist/` 提交到 Git。
+
+### 备份和迁移历史记录
+
+备份前先停止服务：
+
+```bash
+docker compose down
+```
+
+然后备份整个 `persist/` 目录。Linux/macOS：
+
+```bash
+tar -czf ai-trainer-level3-lab-data-backup.tar.gz persist
+```
+
+Windows PowerShell：
+
+```powershell
+Compress-Archive -Path .\persist -DestinationPath .\ai-trainer-level3-lab-data-backup.zip
+```
+
+迁移到另一台机器时，把项目目录和 `persist/` 一起复制过去，再运行：
+
+```bash
+docker compose up
+```
+
+如果只复制代码、不复制 `persist/`，新机器会生成一个空数据库，看起来就是全新的系统。
 
 ## Windows Notes
 

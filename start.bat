@@ -30,5 +30,6 @@ if "!HOST_PORT!"=="" set "HOST_PORT=8097"
 
 echo.
 echo AI Trainer Level 3 Lab 已启动： http://localhost:!HOST_PORT!
+echo 历史记录保存在当前目录的 persist\ 中，请勿删除该目录。
 start http://localhost:!HOST_PORT!
 pause

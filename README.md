@@ -1,15 +1,17 @@
 # AI Trainer Community
 
-AI Trainer Community is a local-first exam practice and training web app built with FastAPI, SQLite, Vue, and Jupyter kernels.
+AI Trainer Community is an open-source, local-first exam practice and training web app for AI trainer exam preparation. It is built with FastAPI, SQLite, Vue, and Jupyter kernels.
 
-This public edition includes:
+This community edition includes a complete runnable system framework:
 
 - Theory question practice with local progress tracking
 - Code-operation practice with per-question workspaces
 - A small sample question bank and sample CSV dataset
 - Docker Compose startup for local deployment
 
-The public repository intentionally does not include private deployment files, buyer watermarking, WeChat gating, internal AI grading workers, production IPs, local machine paths, tokens, or the full proprietary training dataset.
+The public repository intentionally does not include private deployment files, buyer watermarking, WeChat gating, internal AI grading workers, production IPs, local machine paths, tokens, or the full training question bank.
+
+For the complete question bank, classroom deployment package, or commercial support, please contact the project author.
 
 ## Quick Start
 
@@ -45,6 +47,8 @@ Sample content lives under `data/`:
 - `data/questions/<operation_id>/` for files used by a code operation
 
 Large model files and private datasets are excluded by `.gitignore`.
+
+This repository is meant to show the system, data format, and local deployment flow. You can add your own original or licensed questions by editing the JSON files above and placing operation assets under `data/questions/<operation_id>/`.
 
 ## Security Notes
 

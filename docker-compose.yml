@@ -3,6 +3,9 @@ name: ai-trainer-level3-lab
 services:
   trainer:
     image: ai-trainer-level3-lab:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: ai-trainer
     restart: unless-stopped
     ports:

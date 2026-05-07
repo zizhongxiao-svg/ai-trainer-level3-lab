@@ -69,6 +69,50 @@ docker compose down
 docker compose up
 ```
 
+## Docker Compose YAML
+
+仓库已内置 `docker-compose.yml`。如果你只想复制一份最小配置，可以使用下面这份：
+
+```yaml
+name: ai-trainer-level3-lab
+
+services:
+  trainer:
+    image: ai-trainer-level3-lab:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-trainer
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8097}:8097"
+    environment:
+      TRAINER_EDITION: "${TRAINER_EDITION:-community}"
+      TRAINER_DB_PATH: /app/persist/trainer.db
+      TRAINER_DATA_DIR: /app/persist
+      TRAINER_QUESTIONS_PATH: /app/data/questions.json
+      TRAINER_OPERATIONS_PATH: /app/data/operations.json
+      TRAINER_DISABLED_FEATURES: "${TRAINER_DISABLED_FEATURES:-}"
+      TZ: "${TZ:-Asia/Shanghai}"
+      WEB_CONCURRENCY: "1"
+    volumes:
+      - ./persist:/app/persist
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8097/api/edition',timeout=3);sys.exit(0)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+```
+
+常用命令：
+
+```bash
+docker compose up --build
+docker compose down
+```
+
+如果只是使用离线包，启动脚本会先导入 `ai-trainer-level3-lab.tar.gz`，再执行 `docker compose up -d`。
+
 ## How To Use
 
 ### 理论题练习

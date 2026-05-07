@@ -51,7 +51,7 @@ def require_ops_unlocked(user: dict) -> None:
             "code": "OPS_UNLOCK_REQUIRED",
             "message": "操作题训练需要解锁码",
             "title": "操作题需要解锁码",
-            "description": "操作题解锁功能在 Community Edition 中默认关闭。若你启用该功能，请通过自己的后台生成并分发 8 位解锁码。",
+            "description": "操作题解锁功能在公开版中默认关闭。若你启用该功能，请通过自己的后台生成并分发 8 位解锁码。",
         },
     )
 

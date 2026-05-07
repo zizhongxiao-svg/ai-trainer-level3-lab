@@ -1,5 +1,5 @@
 from __future__ import annotations
-"""Disabled WeChat follow gate for the public Community Edition."""
+"""Disabled WeChat follow gate for the public edition."""
 
 from fastapi import APIRouter, HTTPException
 
@@ -23,4 +23,4 @@ def mark_user_requires_gate(user_id: int) -> None:
 
 
 def build_gate_response(user_id: int) -> dict:
-    raise HTTPException(404, "WeChat gate is not available in Community Edition")
+    raise HTTPException(404, "WeChat gate is not available in the public edition")

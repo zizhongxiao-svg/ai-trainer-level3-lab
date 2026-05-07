@@ -1,7 +1,0 @@
-customer_id,plan,monthly_spend,churned
-C001,basic,19.9,0
-C002,pro,49.9,1
-C003,basic,18.5,0
-C004,team,89.0,0
-C005,pro,52.0,1
-C006,team,95.0,0

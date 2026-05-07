@@ -1,0 +1,9 @@
+*.docx binary
+*.xlsx binary
+*.onnx binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+
+data/questions/**/*.csv -diff
+data/questions/**/*.ipynb -diff

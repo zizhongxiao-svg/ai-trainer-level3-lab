@@ -1,17 +1,16 @@
-# AI Trainer Community
+# AI Trainer Level 3 Lab
 
-AI Trainer Community is an open-source, local-first exam practice and training web app for AI trainer exam preparation. It is built with FastAPI, SQLite, Vue, and Jupyter kernels.
+AI Trainer Level 3 Lab is an open-source, local-first practice system for 人工智能训练师三级 exam preparation. It is built with FastAPI, SQLite, Vue, Docker, and Jupyter kernels.
 
-This community edition includes a complete runnable system framework:
+This repository includes a complete runnable training system:
 
 - Theory question practice with local progress tracking
 - Code-operation practice with per-question workspaces
-- A small sample question bank and sample CSV dataset
+- Full bundled question data for this project: 900 theory questions and 40 operation tasks
+- Operation assets including CSV/XLSX datasets, notebooks, documents, images, and ONNX model files
 - Docker Compose startup for local deployment
 
-The public repository intentionally does not include private deployment files, buyer watermarking, WeChat gating, internal AI grading workers, production IPs, local machine paths, tokens, or the full training question bank.
-
-For the complete question bank, classroom deployment package, or commercial support, please contact the project author.
+The public repository intentionally does not include private deployment files, buyer watermarking, WeChat gating, internal AI grading workers, production IPs, local machine paths, tokens, class rosters, learner records, SQLite databases, or logs.
 
 ## Quick Start
 
@@ -38,18 +37,16 @@ pytest
 uvicorn app.server:app --reload --host 0.0.0.0 --port 8097
 ```
 
-## Content
+## Question Data
 
-Sample content lives under `data/`:
+Question content lives under `data/`:
 
 - `data/questions.json` for theory questions
 - `data/operations.json` for operation metadata
 - `data/questions/<operation_id>/` for files used by a code operation
 
-Large model files and private datasets are excluded by `.gitignore`.
-
-This repository is meant to show the system, data format, and local deployment flow. You can add your own original or licensed questions by editing the JSON files above and placing operation assets under `data/questions/<operation_id>/`.
+You can add or replace questions by editing the JSON files above and placing operation assets under `data/questions/<operation_id>/`.
 
 ## Security Notes
 
-Do not commit `.env`, SQLite databases, logs, model weights, credentials, or exported user data. Any external AI grading or SSO integration should be added as an opt-in integration that reads credentials from environment variables or a private secret manager.
+Do not commit `.env`, SQLite databases, logs, credentials, local deployment files, class rosters, or exported user data. Any external AI grading or SSO integration should be added as an opt-in integration that reads credentials from environment variables or a private secret manager.

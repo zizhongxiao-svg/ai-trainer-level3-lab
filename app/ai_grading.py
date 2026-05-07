@@ -1,7 +1,7 @@
 from __future__ import annotations
 """Optional AI grading hook.
 
-The public Community Edition ships without a bundled AI grader or external
+The public edition ships without a bundled AI grader or external
 worker configuration. Projects that need automatic free-text grading can wire
 their own implementation here, using environment variables for credentials.
 """
@@ -32,8 +32,8 @@ def grading_reasoning_effort() -> str:
 
 
 def build_doc_grading_prompt(*, exam_session_id: int, operation: dict, answers: dict) -> str:
-    raise AIGradingDisabled("AI grading is not bundled in Community Edition")
+    raise AIGradingDisabled("AI grading is not bundled in the public edition")
 
 
 def grade_doc_answer_with_ai(*, exam_session_id: int, operation: dict, answers: dict) -> AIGradeResult:
-    raise AIGradingDisabled("AI grading is not bundled in Community Edition")
+    raise AIGradingDisabled("AI grading is not bundled in the public edition")

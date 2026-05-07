@@ -29,8 +29,12 @@ def test_community_startup_and_operation_files(tmp_path, monkeypatch):
 
         ops = client.get("/api/operations", headers=headers)
         assert ops.status_code == 200
-        assert ops.json()["total"] == 1
+        assert ops.json()["total"] == 40
 
         files = client.get("/api/operations/1/files", headers=headers)
         assert files.status_code == 200
-        assert any(f["name"] == "customer_churn_sample.csv" for f in files.json()["files"])
+        assert any(f["name"] == "patient_data.csv" for f in files.json()["files"])
+
+        model_files = client.get("/api/operations/26/files", headers=headers)
+        assert model_files.status_code == 200
+        assert any(f["name"] == "resnet.onnx" for f in model_files.json()["files"])

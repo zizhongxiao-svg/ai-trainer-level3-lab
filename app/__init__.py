@@ -1,1 +1,1 @@
-"""AI Trainer Community backend package."""
+"""AI Trainer Level 3 Lab backend package."""

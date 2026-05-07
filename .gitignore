@@ -9,7 +9,6 @@ logs/
 persist/
 dist/
 _archive/
-*.onnx
 *.pkl
 *.joblib
 *.zip

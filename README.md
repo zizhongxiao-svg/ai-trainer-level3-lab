@@ -263,6 +263,21 @@ TRAINER_DB_PATH: /app/persist/trainer.db
 
 生成文件在 `dist/` 下。离线包会包含 Docker 镜像和启动脚本，适合没有开发环境的机器使用。
 
+## Windows 一键安装包（Setup.exe）
+
+给不熟悉命令行的用户：可以把社区版打包成一个 Windows `Setup.exe`，双击安装后桌面会出现「AI训练师三级 备考通」图标，双击即启动、浏览器自动打开。底层仍通过 Docker 运行，使用者机器需先装好 Docker Desktop。
+
+打包脚本（Inno Setup）和完整步骤见：
+
+```text
+installer/build-windows-installer.md
+```
+
+简述：`./build_release.sh` 生成镜像 → 把 `ai-trainer-level3-lab.tar.gz` 放进 `installer/payload/` → 在 Windows 上用 [Inno Setup 6](https://jrsoftware.org/isdl.php) 编译 `installer/ai-trainer-setup.iss` → 得到 `installer/Output/AITrainer-Level3-Setup-*.exe`。
+
+> 安装包默认装到当前用户目录（无需管理员），账号与答题进度保存在安装目录的 `persist\`，**卸载不会删除**。
+> 想要完全免 Docker 的原生 exe 需在 Windows 上额外构建科学库 wheel，本仓库暂未提供，见同文档说明。
+
 ## Local Python Development
 
 只想使用系统的用户不需要看这一节。开发者可以直接本地跑 FastAPI：

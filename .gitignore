@@ -14,5 +14,9 @@ image/
 *.joblib
 *.zip
 *.tar.gz
+*.exe
 trainer.db
 secret.key
+installer/Output/
+installer/payload/*
+!installer/payload/.gitkeep

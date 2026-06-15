@@ -1,0 +1,2 @@
+# 把 build_release.sh 生成的 ai-trainer-level3-lab.tar.gz 放在本目录。
+# *.tar.gz 已被 .gitignore 忽略，不会提交进仓库。详见 ../build-windows-installer.md

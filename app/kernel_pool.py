@@ -88,8 +88,10 @@ class KernelPool:
         mode = os.environ.get("TRAINER_SANDBOX", "off").lower()
         if mode != "firejail":
             return None
-        profile = os.environ.get("TRAINER_FIREJAIL_PROFILE",
-                                 "/home/atxuser/ai_training/trainer/infra/firejail/kernel.profile")
+        default_profile = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "infra", "firejail", "kernel.profile")
+        profile = os.environ.get("TRAINER_FIREJAIL_PROFILE", default_profile)
         return ["firejail", f"--profile={profile}", "--quiet",
                 "python", "-m", "ipykernel_launcher", "-f", "{connection_file}"]
 

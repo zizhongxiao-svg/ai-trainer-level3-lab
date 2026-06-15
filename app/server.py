@@ -111,6 +111,9 @@ class AnswerReq(BaseModel):
     question_id: int
     selected: list[str]
 
+class BatchAnswerReq(BaseModel):
+    answers: list[AnswerReq]
+
 class ExamSubmitReq(BaseModel):
     session_id: int
     answers: list[AnswerReq]
@@ -418,6 +421,51 @@ def submit_answer(req: AnswerReq, user=Depends(get_current_user)):
         "correct_answer": json.loads(q["answer"]),
         "user_answer": req.selected
     }
+
+
+@app.post("/api/answers/batch")
+def submit_answers_batch(req: BatchAnswerReq, user=Depends(get_current_user)):
+    """Submit multiple answers in a single transaction.
+
+    Per-item failures (missing question, invalid option) do not abort the
+    batch — successful items still write, failed items appear in `errors`.
+    """
+    if len(req.answers) > 200:
+        raise HTTPException(400, "单次最多提交 200 题")
+
+    results: list[dict] = []
+    errors: list[dict] = []
+    with get_db() as db:
+        for item in req.answers:
+            q = db.execute("SELECT * FROM questions WHERE id=?",
+                           (item.question_id,)).fetchone()
+            if not q:
+                errors.append({"question_id": item.question_id,
+                               "error": "题目不存在"})
+                continue
+            try:
+                user_answer = normalize_selected_options(q, item.selected)
+            except HTTPException as e:
+                errors.append({"question_id": item.question_id,
+                               "error": e.detail})
+                continue
+
+            correct_answer = sorted(json.loads(q["answer"]))
+            is_correct = int(correct_answer == user_answer)
+            db.execute(
+                "INSERT INTO user_answers (user_id, question_id, selected, is_correct, answered_at) "
+                "VALUES (?,?,?,?,datetime('now','localtime'))",
+                (user["id"], item.question_id,
+                 json.dumps(user_answer, ensure_ascii=False), is_correct)
+            )
+            results.append({
+                "question_id": item.question_id,
+                "is_correct": bool(is_correct),
+                "correct_answer": json.loads(q["answer"]),
+                "user_answer": item.selected,
+            })
+
+    return {"results": results, "errors": errors}
 
 
 # ── Exam endpoints ──────────────────────────────────────────────────────────

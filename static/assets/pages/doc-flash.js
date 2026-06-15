@@ -17,23 +17,31 @@ export async function renderDocFlash(host) {
   const state = { cat: '全部', showAll: false };
 
   host.innerHTML = `
-    <div style="padding:20px 24px 0">
-      <div class="bk-card" style="margin-bottom:0;padding:14px 18px">
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-          <div style="flex:1;min-width:200px">
-            <div class="label" style="margin-bottom:2px">小作文速记</div>
-            <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-              <h2 style="margin:0;font-size:1.1rem">文档题考点速查</h2>
-              <span class="small" style="color:var(--ink-3)">20道题 · 看考点背要点，不用背整篇答案</span>
+    <div class="df-layout">
+      <aside class="df-sidebar">
+        <div class="df-sidebar-title">题目目录</div>
+        <div id="df-nav" class="df-nav"></div>
+      </aside>
+      <div class="df-main">
+        <div style="padding:20px 24px 0">
+          <div class="bk-card" style="margin-bottom:0;padding:14px 18px">
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+              <div style="flex:1;min-width:200px">
+                <div class="label" style="margin-bottom:2px">小作文速记</div>
+                <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+                  <h2 style="margin:0;font-size:1.1rem">文档题考点速查</h2>
+                  <span class="small" style="color:var(--ink-3)">20道题 · 看考点背要点，不用背整篇答案</span>
+                </div>
+              </div>
+              <button id="df-toggle-all" class="bk-btn bk-btn-ghost bk-btn-sm"
+                      style="min-width:96px">显示答案</button>
             </div>
+            <div id="df-cats" class="bk-filter-bar" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"></div>
           </div>
-          <button id="df-toggle-all" class="bk-btn bk-btn-ghost bk-btn-sm"
-                  style="min-width:96px">显示答案</button>
         </div>
-        <div id="df-cats" class="bk-filter-bar" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"></div>
+        <div id="df-grid" style="padding:12px 24px 32px"></div>
       </div>
     </div>
-    <div id="df-grid" style="padding:12px 24px 32px"></div>
   `;
 
   const toggleBtn = host.querySelector('#df-toggle-all');
@@ -49,6 +57,7 @@ export async function renderDocFlash(host) {
   });
 
   renderCats();
+  renderNav();
   renderGrid();
 
   function renderCats() {
@@ -62,9 +71,60 @@ export async function renderDocFlash(host) {
       btn.addEventListener('click', () => {
         state.cat = btn.dataset.cat;
         renderCats();
+        renderNav();
         renderGrid();
       })
     );
+  }
+
+  function renderNav() {
+    const nav = host.querySelector('#df-nav');
+    const groups = {};
+    allOps.forEach(o => { (groups[o.category] = groups[o.category] || []).push(o); });
+
+    nav.innerHTML = Object.entries(groups).map(([cat, items]) => {
+      const active = state.cat === '全部' || state.cat === cat;
+      const itemsHtml = items.map(o => {
+        const sectionNo = opSectionNo(o.id);
+        const titlePrefix = sectionNo || `#${o.id}`;
+        const shortTitle = (o.title || '').replace(/^[\d.]+\s*/, '').trim();
+        return `
+          <button class="df-nav-item" data-jump="${o.id}" data-cat="${esc(cat)}"
+                  title="${esc(shortTitle)}">
+            <span class="df-nav-no">${esc(titlePrefix)}</span>
+            <span class="df-nav-title">${esc(shortTitle)}</span>
+          </button>
+        `;
+      }).join('');
+      return `
+        <div class="df-nav-group ${active ? '' : 'is-dim'}">
+          <div class="df-nav-group-label">${esc(cat)} <span class="small">(${items.length})</span></div>
+          ${itemsHtml}
+        </div>
+      `;
+    }).join('');
+
+    nav.querySelectorAll('[data-jump]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.jump;
+        const targetCat = btn.dataset.cat;
+        // 如果当前过滤分类不包含目标，先切到"全部"
+        if (state.cat !== '全部' && state.cat !== targetCat) {
+          state.cat = '全部';
+          renderCats();
+          renderNav();
+          renderGrid();
+        }
+        const card = host.querySelector(`[data-card-id="${id}"]`);
+        if (card) {
+          card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          card.classList.add('df-card-flash');
+          setTimeout(() => card.classList.remove('df-card-flash'), 1200);
+        }
+        nav.querySelectorAll('.df-nav-item').forEach(el => el.classList.remove('on'));
+        btn.classList.add('on');
+      });
+    });
   }
 
   function renderGrid() {
@@ -117,7 +177,7 @@ export async function renderDocFlash(host) {
     `).join('');
 
     return `
-      <div class="df-card bk-card">
+      <div class="df-card bk-card" data-card-id="${o.id}">
         <div class="df-card-head">
           <span class="df-card-no" title="题目编号 #${o.id}">${esc(titlePrefix)}</span>
           <span class="bk-chip on" style="pointer-events:none;font-size:0.75rem">${esc(o.category)}</span>

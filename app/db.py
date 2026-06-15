@@ -9,17 +9,28 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent
 DEFAULT_DB = BASE_DIR / "trainer.db"
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+DEFAULT_BUSY_TIMEOUT_MS = 10000
 
 
 def db_path() -> Path:
     return Path(os.environ.get("TRAINER_DB_PATH", str(DEFAULT_DB)))
 
 
+def busy_timeout_ms() -> int:
+    try:
+        value = int(os.environ.get("TRAINER_DB_BUSY_TIMEOUT_MS", str(DEFAULT_BUSY_TIMEOUT_MS)))
+    except ValueError:
+        value = DEFAULT_BUSY_TIMEOUT_MS
+    return max(0, value)
+
+
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(str(db_path()))
+    timeout_ms = busy_timeout_ms()
+    conn = sqlite3.connect(str(db_path()), timeout=timeout_ms / 1000)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn

@@ -15,8 +15,53 @@ from typing import Optional
 
 from jupyter_client.manager import AsyncKernelManager
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - non-Unix fallback
+    resource = None
+
 
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("TRAINER_KERNEL_IDLE_TIMEOUT", "900"))  # 15 min
+DEFAULT_MAX_ACTIVE_KERNELS = 60
+DEFAULT_NOFILE_TARGET = 65535
+# 超过此大小的题目文件（如 .onnx 模型）硬链接进工作目录而非复制
+HARDLINK_MIN_BYTES = int(os.environ.get("TRAINER_WS_HARDLINK_MIN_BYTES", str(8 * 1024 * 1024)))
+
+
+class KernelPoolFull(RuntimeError):
+    pass
+
+
+def max_active_kernels() -> int:
+    try:
+        value = int(os.environ.get("TRAINER_KERNEL_MAX_ACTIVE", str(DEFAULT_MAX_ACTIVE_KERNELS)))
+    except ValueError:
+        value = DEFAULT_MAX_ACTIVE_KERNELS
+    return max(0, value)
+
+
+def ensure_open_file_limit(target: int | None = None) -> tuple[int, int, int] | None:
+    """Raise RLIMIT_NOFILE soft limit for many concurrent Jupyter kernels."""
+    if resource is None:
+        return None
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if target is None:
+            try:
+                target = int(os.environ.get("TRAINER_KERNEL_NOFILE_TARGET", str(DEFAULT_NOFILE_TARGET)))
+            except ValueError:
+                target = DEFAULT_NOFILE_TARGET
+        if target <= 0:
+            return (soft, soft, hard)
+        infinity = getattr(resource, "RLIM_INFINITY", -1)
+        desired = target if hard == infinity else min(target, hard)
+        if soft < desired:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (desired, hard))
+            return (soft, desired, hard)
+        return (soft, soft, hard)
+    except (OSError, ValueError) as exc:
+        print(f"[kernel_pool] unable to raise open file limit: {exc}")
+        return None
 
 
 @dataclass
@@ -43,10 +88,8 @@ class KernelPool:
         mode = os.environ.get("TRAINER_SANDBOX", "off").lower()
         if mode != "firejail":
             return None
-        default_profile = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "infra", "firejail", "kernel.profile")
-        )
-        profile = os.environ.get("TRAINER_FIREJAIL_PROFILE", default_profile)
+        profile = os.environ.get("TRAINER_FIREJAIL_PROFILE",
+                                 "/home/atxuser/ai_training/trainer/infra/firejail/kernel.profile")
         return ["firejail", f"--profile={profile}", "--quiet",
                 "python", "-m", "ipykernel_launcher", "-f", "{connection_file}"]
 
@@ -62,6 +105,60 @@ class KernelPool:
         empty.mkdir(parents=True, exist_ok=True)
         return str(empty)
 
+    @staticmethod
+    def _sync_question_files(src_dir, ws_dir) -> None:
+        """把题目源文件同步进工作目录。
+
+        - 小文件复制；>= HARDLINK_MIN_BYTES 的大文件（onnx 等）硬链接并去掉
+          写权限（硬链接共享 inode，留写权限会让考生一句 open(..., 'w')
+          直接截断原件）。
+        - 已与原件一致的目标文件跳过；被考生改坏的用原件覆盖恢复。
+        - 考生自己生成的额外文件不动。
+        """
+        import pathlib
+        import shutil
+        src_dir = pathlib.Path(src_dir)
+        ws_dir = pathlib.Path(ws_dir)
+        for src in src_dir.rglob("*"):
+            if not src.is_file() or "__pycache__" in src.parts or src.suffix == ".pyc":
+                continue
+            dst = ws_dir / src.relative_to(src_dir)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            s = src.stat()
+            if s.st_size >= HARDLINK_MIN_BYTES:
+                if dst.exists():
+                    if dst.stat().st_ino == s.st_ino:
+                        continue
+                    dst.unlink()
+                try:
+                    os.link(src, dst)
+                    os.chmod(dst, 0o444)
+                except OSError:
+                    shutil.copy2(src, dst)
+            else:
+                if dst.exists():
+                    d = dst.stat()
+                    if d.st_size == s.st_size and abs(d.st_mtime - s.st_mtime) < 1:
+                        continue  # copy2 保留 mtime，一致即未被改动
+                    dst.unlink()
+                shutil.copy2(src, dst)
+
+    @classmethod
+    def _user_workspace(cls, user_id: int, operation_id: int) -> str:
+        """返回 (user, op) 独立 cwd：data/op_workspaces/<user>/<op>/。
+
+        每次新建 kernel 时从 data/questions/<op>/ 同步源文件，考生改坏
+        文件只影响自己，且重启 kernel 即自动恢复原件。
+        """
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent  # trainer/
+        ws = root / "data" / "op_workspaces" / str(user_id) / str(operation_id)
+        ws.mkdir(parents=True, exist_ok=True)
+        src = root / "data" / "questions" / str(operation_id)
+        if src.is_dir():
+            cls._sync_question_files(src, ws)
+        return str(ws)
+
     async def allocate(self, user_id: int, operation_id: int) -> str:
         """返回 kernel_id。同 (user, op) 已有则复用。"""
         key = (user_id, operation_id)
@@ -73,13 +170,20 @@ class KernelPool:
                     return kid
                 del self._by_user_op[key]
 
+            limit = max_active_kernels()
+            active = len(self._kernels)
+            if limit and active >= limit:
+                raise KernelPoolFull(
+                    f"当前实操运行人数较多（{active}/{limit} 个运行环境已占用），请稍后再试。"
+                )
+
             km_kwargs = {"kernel_name": "python3"}
             cmd = self._kernel_cmd()
             if cmd:
                 km_kwargs["kernel_cmd"] = cmd
 
             km = AsyncKernelManager(**km_kwargs)
-            await km.start_kernel(cwd=self._op_workspace(operation_id))
+            await km.start_kernel(cwd=self._user_workspace(user_id, operation_id))
             kc = km.client()
             kc.start_channels()
             await kc.wait_for_ready(timeout=30)
@@ -116,6 +220,13 @@ class KernelPool:
         if entry:
             entry.last_active = time.time()
         return entry
+
+    def touch(self, kernel_id: str) -> bool:
+        entry = self._kernels.get(kernel_id)
+        if not entry:
+            return False
+        entry.last_active = time.time()
+        return True
 
     async def execute_stream(self, kernel_id: str, cell_id: str, code: str):
         """按 cell_id 执行一段 code，异步生成事件流。
@@ -198,6 +309,16 @@ class KernelPool:
                            "evalue": content.get("evalue", ""),
                            "traceback": content.get("traceback", [])}
                 elif mtype == "status" and content.get("execution_state") == "idle":
+                    break
+
+            shell_deadline = time.time() + 5
+            while time.time() < shell_deadline:
+                try:
+                    reply = await kc.get_shell_msg(timeout=1)
+                except Exception:
+                    break
+                parent = (reply.get("parent_header") or {}).get("msg_id")
+                if parent == msg_id:
                     break
 
             yield {"type": "done", "cell_id": cell_id, "status": status}

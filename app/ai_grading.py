@@ -37,3 +37,7 @@ def build_doc_grading_prompt(*, exam_session_id: int, operation: dict, answers: 
 
 def grade_doc_answer_with_ai(*, exam_session_id: int, operation: dict, answers: dict) -> AIGradeResult:
     raise AIGradingDisabled("AI grading is not bundled in the public edition")
+
+
+def grade_report_with_ai(*, session_id: int, operation: dict, sections: dict) -> dict:
+    raise AIGradingDisabled("AI grading is not bundled in the public edition")

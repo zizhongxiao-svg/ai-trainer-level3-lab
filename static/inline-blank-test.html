@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>行内填空渲染测试</title>
 <link rel="stylesheet" href="assets/theme.css">
-<link rel="stylesheet" href="assets/components.css?v=20260426-19">
+<link rel="stylesheet" href="assets/components.css?v=20260528-wraparea3">
 <style>
 body { padding: 24px; max-width: 900px; margin: 0 auto; }
 .demo { margin: 16px 0; padding: 12px; border: 1px solid #ccc; border-radius: 4px; }
@@ -14,10 +14,10 @@ body { padding: 24px; max-width: 900px; margin: 0 auto; }
 </head>
 <body>
 <h1>行内填空渲染测试（不需要登录）</h1>
-<p>如果下面 4 个 demo 都看到 <strong>给定文本 + 黄色边框小输入框</strong> 同行排布，说明前端渲染没问题；如果还是整行，说明 CSS/JS 没生效。</p>
+<p>如果下面 5 个 demo 都看到 <strong>给定文本 + 黄色边框小输入框</strong> 同行排布，且长答案到右边界后再换行，说明前端渲染没问题。</p>
 <div id="root"></div>
 <script type="module">
-import { createCell } from './assets/components/jupyter-cell.js?v=20260426-3';
+import { createCell } from './assets/components/jupyter-cell.js?v=20260528-wraparea3';
 
 const cases = [
   {
@@ -54,6 +54,14 @@ const cases = [
           '            (_____________(0, 200)) & \n' +
           '            (_____________(1, 1000)) & \n' +
           '            (_____________(1, 1440))]' },
+    ],
+  },
+  {
+    title: 'q12 #4 长答案（选择特征，应自动换行+变高）',
+    segments: [
+      { type: 'given', code: '# 选择特征' },
+      { type: 'blank', hint: '选择特征', blankIndex: 0,
+        template: 'selected_features = [_____________]\nX = _____________' },
     ],
   },
 ];

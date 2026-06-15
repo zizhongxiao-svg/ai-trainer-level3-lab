@@ -1,6 +1,6 @@
 import { API } from '../api.js?v=20260503-docx-template-1';
 import { installAutoSave } from './_draft-autosave.js';
-import { bindOperationFiles, bindSolutionGuideButton, escapeHtml, notifySubmitResult, opSectionNo, pickResetMode, renderFilesPanelShell, renderOperationTasks, renderSolutionGuideButton, withSubmittingOverlay } from './_op-helpers.js?v=20260503-task-number-1';
+import { bindOperationFiles, bindSolutionGuideButton, confirmModal, escapeHtml, notifySubmitResult, opSectionNo, pickResetMode, renderFilesPanelShell, renderOperationTasks, renderSolutionGuideButton, withSubmittingOverlay } from './_op-helpers.js?v=20260610-dialogfree';
 import { handleOpsUnlockError } from './_ops-unlock.js?v=20260429-2';
 
 export async function renderOperationsDoc(host, {
@@ -368,6 +368,7 @@ export async function renderOperationsDoc(host, {
           ? `AI 已判分：<b>${earnedVal}</b> / ${totalScoreVal} 分`
           : `已得 <b>${earnedVal}</b> / ${totalScoreVal} 分`);
       renderAIGrading(state.aiGrading);
+      if (state.aiGrading) openModal('right');
       if (!examMode) {
         await notifySubmitResult({
           score: earnedVal,
@@ -385,7 +386,6 @@ export async function renderOperationsDoc(host, {
       }
     } catch (e) {
       alert(e.message || 'AI 判分失败，请重试');
-      setSubmitting(false);
       const submitBtn = host.querySelector('.bk-op-submit');
       if (submitBtn) {
         submitBtn.removeAttribute('disabled');
@@ -397,6 +397,8 @@ export async function renderOperationsDoc(host, {
         const lbl = stripBtn.querySelector('.bk-op-panel-btn-label');
         if (lbl) lbl.textContent = '提交';
       }
+    } finally {
+      state.grading = false;
     }
   });
 
@@ -409,7 +411,7 @@ export async function renderOperationsDoc(host, {
   host.querySelector('.bk-op-strip-reset')?.addEventListener('click', async () => {
     if (state.grading) return;
     if (examMode && state.submitted) {
-      alert('考试模式不允许撤销已提交的作答');
+      await notifySubmitResult({ title: '无法重置', detail: '考试模式不允许撤销已提交的作答。' });
       return;
     }
     const mode = await pickResetMode({
@@ -420,13 +422,21 @@ export async function renderOperationsDoc(host, {
     if (!mode) return;
     try {
       await API.opSessionReset(state.sessionId, mode);
+      // 阻止 beforeunload 的 autosave flush 把旧的 state.answers 写回，
+      // 否则后端刚清掉的草稿会被覆盖回去。
+      host.__bkPushDraft = async () => {};
       window.location.reload();
     } catch (e) { alert('重置失败：' + (e.message || e)); }
   });
 
   // 放弃此次作答
   host.querySelector('.bk-op-discard')?.addEventListener('click', async () => {
-    if (!confirm('确认放弃此次作答？\n\n已填写的草稿会被删除，操作不可撤销。')) return;
+    const okDiscard = await confirmModal({
+      title: '确认放弃此次作答？',
+      message: '已填写的草稿会被删除，操作不可撤销。',
+      confirmLabel: '放弃作答',
+    });
+    if (!okDiscard) return;
     try {
       await API.opSessionDiscard(state.sessionId);
       window.location.hash = examMode ? examBackHash : '#/ops';

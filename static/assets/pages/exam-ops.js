@@ -1,6 +1,6 @@
 import { API } from '../api.js';
-import { renderOperationsCode } from './operations-code.js?v=20260430-code-cell-cont-1';
-import { renderOperationsDoc } from './operations-doc.js?v=20260503-docx-learning-goal-1';
+import { renderOperationsCode } from './operations-code.js?v=20260611-report-2';
+import { renderOperationsDoc } from './operations-doc.js?v=20260610-dialogfree';
 import { opSectionNo, withSubmittingOverlay } from './_op-helpers.js?v=20260430-2';
 import { handleOpsUnlockError, ignoreOpsUnlock } from './_ops-unlock.js?v=20260429-2';
 
@@ -70,9 +70,12 @@ async function renderExamReviewOperation(host, sidStr, opIdStr) {
   const opId = Number(opIdStr);
   host.innerHTML = '<p class="label" style="padding:24px 0">加载复盘题目…</p>';
 
-  let op;
+  let exam, op;
   try {
-    op = await API.operation(opId);
+    [exam, op] = await Promise.all([
+      API.opsExamGet(Number(sidStr)),
+      API.operation(opId),
+    ]);
   } catch (e) {
     if (handleOpsUnlockError(e, () => renderExamReviewOperation(host, sidStr, opIdStr))) {
       host.innerHTML = `<div class="bk-card"><p class="small">需要先解锁才能查看复盘内容。</p></div>`;
@@ -86,15 +89,43 @@ async function renderExamReviewOperation(host, sidStr, opIdStr) {
     return;
   }
 
+  const reviewSessionId = reviewSessionIdForOperation(exam, opId);
+  if (!reviewSessionId) {
+    const p = exam?.per_op?.[String(opId)] || {};
+    host.innerHTML = `
+      <div class="bk-card" style="text-align:center;padding:40px">
+        <h2 style="margin-top:0">本题未提交</h2>
+        <p class="small" style="color:var(--ink-3)">
+          这道题没有可复盘的作答记录，已按 ${fmt(p.earned ?? 0)} / ${fmt(p.total ?? op.total_score ?? 0)} 分计入本场成绩。
+        </p>
+        <button class="bk-btn bk-btn-primary" data-back style="margin-top:12px">返回成绩</button>
+      </div>
+    `;
+    host.querySelector('[data-back]')?.addEventListener('click', () => {
+      window.location.hash = `#/exam-ops/${sidStr}/result`;
+    });
+    return;
+  }
+
+  const examIndex = (exam?.operation_ids || []).indexOf(opId) + 1;
   const ctx = {
     id: opId,
     examMode: true,
     examModeLabel: '实操模拟考试复盘',
     examSessionId: sidStr,
+    examIndex: examIndex > 0 ? examIndex : null,
     examBackHash: `#/exam-ops/${sidStr}/result`,
+    sessionId: reviewSessionId,
   };
   if (op.type === 'code') return renderOperationsCode(host, ctx);
   return renderOperationsDoc(host, ctx);
+}
+
+export function reviewSessionIdForOperation(exam, opId) {
+  const p = exam?.per_op?.[String(opId)];
+  if (!p?.submitted || p.op_session_id == null) return null;
+  const id = Number(p.op_session_id);
+  return Number.isFinite(id) && id > 0 ? id : null;
 }
 
 // ── Entry / Active ───────────────────────────────────────────────────
@@ -357,7 +388,7 @@ async function renderResult(host, sidStr) {
                   <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="题目编号 #${op.id}">${opSectionNo(op.id) || '#' + op.id} ${escHtml(op.title || '')}</span>
                   <span class="small" style="flex-shrink:0;white-space:nowrap;color:${done ? 'var(--ink-2)' : 'var(--ink-3)'}">${p.grade_status === 'failed' ? '判卷失败' : (done ? '已作答' : '未提交')}</span>
                   <strong style="flex-shrink:0;white-space:nowrap;color:${e >= t * 0.6 && t > 0 ? 'var(--ok)' : 'var(--err)'}">${fmt(e)} / ${fmt(t)}</strong>
-                  <button class="bk-btn bk-btn-sm" style="flex-shrink:0" data-review="${op.id}">查看</button>
+                  <button class="bk-btn bk-btn-sm" style="flex-shrink:0" data-review="${op.id}">复盘</button>
                 </div>
                 ${p.ai_feedback?.summary ? `<div class="small" style="margin-top:4px;padding-left:56px;color:var(--ink-3)">${escHtml(p.ai_feedback.summary)}</div>` : ''}
               </div>

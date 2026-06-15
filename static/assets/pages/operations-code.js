@@ -1,75 +1,42 @@
-import { API } from '../api.js';
-import { openOpWS } from '../ws-client.js';
-import { createCell } from '../components/jupyter-cell.js?v=20260501-inline-cont-1';
+import { API } from '../api.js?v=20260611-report-1';
+import { openOpWS } from '../ws-client.js?v=20260518-kernel-heartbeat';
+import { createCell } from '../components/jupyter-cell.js?v=20260602-indentcomments';
 import { installAutoSave } from './_draft-autosave.js';
-import { bindOperationFiles, bindSolutionGuideButton, escapeHtml, notifySubmitResult, opSectionNo, pickResetMode, renderFilesPanelShell, renderOperationTasks, renderSolutionGuideButton, withSubmittingOverlay } from './_op-helpers.js?v=20260503-task-number-1';
+import { bindOperationFiles, bindSolutionGuideButton, confirmModal, escapeHtml, notifySubmitResult, opSectionNo, pickResetMode, renderFilesPanelShell, renderOperationTasks, renderSolutionGuideButton, withSubmittingOverlay } from './_op-helpers.js?v=20260610-dialogfree';
 import { handleOpsUnlockError } from './_ops-unlock.js?v=20260429-2';
+import { parseReportDraft, serializeReportDraft, REPORT_DRAFT_KEY } from './_report-training.js?v=20260611-report-1';
+import { segmentsToCells } from './_segments-to-cells.js?v=20260601-cellfallback';
 
-// 把 operations.json 的扁平 code_segments 按 cell 切分。
-// 默认每个 blank 一个 cell；若 blank 后面紧跟同一条 Python 表达式的续行，
-// 则把续行和可能的下一个 blank 合并，避免半句代码跑到下一格开头。
-function firstCodeLine(code = '') {
-  return String(code).split('\n').find((line) => line.trim() && !line.trimStart().startsWith('#')) || '';
-}
-
-function endsWithContinuation(code = '') {
-  return /[([,{&|+*/\\-]\s*$/.test(String(code).trimEnd());
-}
-
-function startsAsContinuation(code = '') {
-  const line = firstCodeLine(code);
-  if (!line) return false;
-  const trimmed = line.trimStart();
-  return /^[)\]}.,&|+*/]/.test(trimmed) || (line.length > trimmed.length && !trimmed.startsWith('#'));
-}
-
-function segmentsToCells(segments) {
-  const cells = [];
-  let buffer = [];
-  let blankIdx = 0;
-  for (let i = 0; i < segments.length; i++) {
-    const s = segments[i];
-    if (s.type === 'given') {
-      buffer.push({ type: 'given', code: s.code || '' });
-    } else if (s.type === 'blank') {
-      buffer.push({
-        type: 'blank',
-        hint: s.hint,
-        template: s.template || '',
-        answer: s.answer || '',
-        input_widths: s.input_widths || [],
-        points: s.points,
-        blankIndex: blankIdx++,
-      });
-      let continuationOpen = endsWithContinuation(s.template || s.answer || '');
-      while (i + 1 < segments.length && segments[i + 1].type === 'given' &&
-             (continuationOpen || startsAsContinuation(segments[i + 1].code || ''))) {
-        const nextGiven = segments[++i];
-        buffer.push({ type: 'given', code: nextGiven.code || '' });
-        continuationOpen = endsWithContinuation(nextGiven.code || '');
-        if (i + 1 < segments.length && segments[i + 1].type === 'blank' &&
-            continuationOpen) {
-          const nextBlank = segments[++i];
-          buffer.push({
-            type: 'blank',
-            hint: nextBlank.hint,
-            template: nextBlank.template || '',
-            answer: nextBlank.answer || '',
-            input_widths: nextBlank.input_widths || [],
-            points: nextBlank.points,
-            blankIndex: blankIdx++,
-          });
-          continuationOpen = endsWithContinuation(nextBlank.template || nextBlank.answer || '');
-        } else {
-          break;
-        }
-      }
-      cells.push({ segments: buffer });
-      buffer = [];
-    }
+// 从 answer_sections 的 OCR 文本里提取「预期输出」：
+// 模式 — 找到最后一行 print(...)，取其后内容；若其中还出现 `# ---` 分隔符
+// （后面是任务文字描述），再在该处截断。找不到则返回 null。
+// 前置：必须代码本身确有 print(...) 才尝试提取，否则不可能有预期输出。
+function extractExpectedOutput(answerSections, codeSegments) {
+  const codeHasPrint = (codeSegments || []).some((s) =>
+    s && s.type === 'given' && /\bprint\s*\(/.test(String(s.code || ''))
+  );
+  if (!codeHasPrint) return null;
+  const sec = (answerSections || []).find((s) => s && s.type === 'code');
+  if (!sec) return null;
+  const content = String(sec.content || '');
+  const lines = content.split('\n');
+  let lastPrintIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/\bprint\s*\(/.test(lines[i])) lastPrintIdx = i;
   }
-  if (buffer.length) cells.push({ segments: buffer });
-  return cells;
+  if (lastPrintIdx < 0) return null;
+  let after = lines.slice(lastPrintIdx + 1).join('\n');
+  // 常见的「输出结束、任务描述开始」分隔符（OCR 文本里的标记）
+  const stoppers = ['# ---', '请勿修改答题卷', /\bIn\s*\[\s*\d*\s*\]\s*:/];
+  let cutAt = after.length;
+  for (const s of stoppers) {
+    let idx = -1;
+    if (typeof s === 'string') idx = after.indexOf(s);
+    else { const m = after.match(s); if (m) idx = m.index; }
+    if (idx >= 0 && idx < cutAt) cutAt = idx;
+  }
+  after = after.slice(0, cutAt).replace(/^[\s\n]+|[\s\n]+$/g, '');
+  return after || null;
 }
 
 export async function renderOperationsCode(host, {
@@ -185,21 +152,24 @@ export async function renderOperationsCode(host, {
 
       <main class="bk-op-main">
         <div class="bk-nb-widget">
-          <div class="bk-nb-header">
-            <span class="bk-nb-title">${examMode ? '实操考试作答' : (opSectionNo(id) || `#${id}`)} · ${escapeHtml(op.title || '实操题')}</span>
-            <span class="bk-op-kstatus"><span class="bk-jcell-status is-idle"></span>Kernel 启动中…</span>
-          </div>
-          <div class="bk-nb-toolbar">
-            <button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-runall" disabled>▶▶ 全部运行</button>
-            <div class="bk-nb-tb-sep"></div>
-            <button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-interrupt" disabled>■ 中断</button>
-            <div class="bk-nb-tb-sep"></div>
-            <button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-fullscreen" title="切换全屏沉浸模式">⛶ 全屏</button>
-            ${examMode ? `<button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-exam-back" title="返回实操考试题单">返回考试</button>` : ''}
-            <span class="small bk-op-draft-hint" style="margin-left:auto">草稿每 5 秒自动保存</span>
+          <div class="bk-nb-stickybar">
+            <div class="bk-nb-header">
+              <span class="bk-nb-title">${examMode ? '实操考试作答' : (opSectionNo(id) || `#${id}`)} · ${escapeHtml(op.title || '实操题')}</span>
+              <span class="bk-op-kstatus"><span class="bk-jcell-status is-idle"></span>Kernel 启动中…</span>
+            </div>
+            <div class="bk-nb-toolbar">
+              <button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-runall" disabled>▶▶ 全部运行</button>
+              <div class="bk-nb-tb-sep"></div>
+              <button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-interrupt" disabled>■ 中断</button>
+              <div class="bk-nb-tb-sep"></div>
+              <button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-fullscreen" title="切换全屏沉浸模式">⛶ 全屏</button>
+              ${examMode ? `<button class="bk-btn bk-btn-ghost bk-btn-sm bk-op-exam-back" title="返回实操考试题单">返回考试</button>` : ''}
+              <span class="small bk-op-draft-hint" style="margin-left:auto">草稿每 5 秒自动保存</span>
+            </div>
           </div>
           <div class="bk-op-autobar" id="bk-op-autobar" style="display:none"></div>
           <div class="bk-nb-cells" id="bk-op-cells"></div>
+          <div id="bk-op-report"></div>
         </div>
       </main>
 
@@ -266,6 +236,78 @@ export async function renderOperationsCode(host, {
     return el;
   });
 
+  // ── 测试报告小作文（仅练习模式，且本题配置了 report_training）──
+  const reportHost = host.querySelector('#bk-op-report');
+  const reportCfg = op.report_training;
+  if (reportHost && reportCfg && !examMode && !session.in_exam) {
+    const rRubric = reportCfg.rubric || [];
+    const draft0 = parseReportDraft(state.blanks);
+    reportHost.innerHTML = `
+      <div class="bk-card" style="margin-top:14px">
+        <div class="label">📝 测试报告小作文 · 真考占 ${rRubric.reduce((a, r) => a + (r.points || 0), 0)} 分</div>
+        <p class="small" style="margin:6px 0 10px;color:var(--ink-3)">${escapeHtml(reportCfg.prompt || '根据上方运行结果撰写测试报告。')}</p>
+        ${rRubric.map((r) => `
+          <div style="margin-bottom:10px">
+            <div class="small" style="margin-bottom:4px"><b>${escapeHtml(r.label || r.id)}</b> · ${r.points} 分</div>
+            <textarea data-rkey="${escapeHtml(r.key || r.id)}" rows="3"
+              style="width:100%;resize:vertical;font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg-1);color:var(--ink-1)"
+              placeholder="写下你的${escapeHtml(r.label || '')}…">${escapeHtml(draft0[r.key || r.id] || '')}</textarea>
+          </div>`).join('')}
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="bk-btn bk-btn-primary bk-btn-sm" data-report-grade>AI 判分</button>
+          <span class="small" style="color:var(--ink-3)">判分不计入本题得分；点左侧「答案」可查看范文</span>
+        </div>
+        <div data-report-result style="display:none;margin-top:10px"></div>
+        <div data-report-ref-body style="display:none;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+          <div class="small" style="margin-bottom:6px;color:var(--ink-3)">📖 参考范文</div>
+          ${rRubric.map((rr) => `
+            <div class="small" style="margin-bottom:8px">
+              <b>${escapeHtml(rr.label || rr.id)}</b>
+              <p class="bk-op-prose" style="margin:4px 0;white-space:pre-wrap">${escapeHtml((reportCfg.reference || {})[rr.key || rr.id] || '')}</p>
+            </div>`).join('')}
+        </div>
+      </div>
+    `;
+    const collectSections = () => {
+      const s = {};
+      reportHost.querySelectorAll('textarea[data-rkey]').forEach((t) => { s[t.dataset.rkey] = t.value; });
+      return s;
+    };
+    reportHost.querySelectorAll('textarea[data-rkey]').forEach((t) =>
+      t.addEventListener('input', () => {
+        state.blanks[REPORT_DRAFT_KEY] = serializeReportDraft(collectSections());
+        host.dispatchEvent(new CustomEvent('bk-draft-dirty'));
+      }));
+    const gradeBtn = reportHost.querySelector('[data-report-grade]');
+    gradeBtn.addEventListener('click', async () => {
+      const sections = collectSections();
+      if (!Object.values(sections).some((v) => v.trim())) {
+        alert('先写点内容再判分');
+        return;
+      }
+      gradeBtn.disabled = true;
+      gradeBtn.textContent = 'AI 判分中…';
+      try {
+        const r = await API.opReportGrade(state.sessionId, sections);
+        const resEl = reportHost.querySelector('[data-report-result]');
+        resEl.style.display = '';
+        resEl.innerHTML = `
+          <p style="margin:0 0 6px"><b>得分 ${r.score} / ${r.max_score}</b></p>
+          ${(r.items || []).map((it) => `
+            <p class="small" style="margin:2px 0">
+              <span class="bk-tag ${it.earned >= it.points ? 'bk-tag-ok' : 'bk-tag-err'}">${escapeHtml(it.label || it.id)} ${it.earned}/${it.points}</span>
+              ${escapeHtml(it.comment || '')}
+            </p>`).join('')}
+        `;
+      } catch (e) {
+        alert('AI 判分失败：' + (e.message || e));
+      } finally {
+        gradeBtn.disabled = false;
+        gradeBtn.textContent = 'AI 判分';
+      }
+    });
+  }
+
   // ── rubric ────────────────────────────────────────────────
   const rubricList = host.querySelector('#bk-rubric-list');
   rubricList.innerHTML = (op.rubric || []).map((r) => `
@@ -295,6 +337,7 @@ export async function renderOperationsCode(host, {
     const stripLbl = host.querySelector('.bk-op-strip-answer .bk-op-panel-btn-label');
     if (stripLbl) stripLbl.textContent = state.showAnswer ? '隐藏' : '答案';
   };
+  const expectedOutput = extractExpectedOutput(op.answer_sections, op.code_segments);
   const toggleAnswer = () => {
     state.showAnswer = !state.showAnswer;
     cells.forEach((c, i) => {
@@ -312,6 +355,22 @@ export async function renderOperationsCode(host, {
         }
       } else if (hint) hint.remove();
     });
+    // 预期输出：附在 cells 容器末尾
+    const existingOut = cellHost.querySelector('.bk-op-expected-output');
+    if (state.showAnswer && expectedOutput) {
+      if (!existingOut) {
+        const box = document.createElement('div');
+        box.className = 'bk-jcell-reference bk-op-expected-output';
+        box.style.cssText = 'margin-top:8px;white-space:pre-wrap;word-break:break-word';
+        box.textContent = `📤 预期输出\n${expectedOutput}`;
+        cellHost.appendChild(box);
+      }
+    } else if (existingOut) {
+      existingOut.remove();
+    }
+    // 测试报告小作文范文：随「答案」开关一起显示
+    const reportRef = host.querySelector('#bk-op-report [data-report-ref-body]');
+    if (reportRef) reportRef.style.display = state.showAnswer ? '' : 'none';
     syncAnswerLabels();
   };
   host.querySelector('.bk-op-toggle-answer')?.addEventListener('click', toggleAnswer);
@@ -320,7 +379,12 @@ export async function renderOperationsCode(host, {
   // ── submit ────────────────────────────────────────────────
   host.querySelector('.bk-op-submit').addEventListener('click', async () => {
     if (state.submitted) return;
-    if (!confirm('确认提交？提交后系统将自动按 blank 对错判分，不可再修改。')) return;
+    const okGo = await confirmModal({
+      title: '确认提交',
+      message: '提交后系统将自动按 blank 对错判分，不可再修改。',
+      confirmLabel: '确认提交',
+    });
+    if (!okGo) return;
     const submitBtn = host.querySelector('.bk-op-submit');
     const stripBtn = host.querySelector('.bk-op-strip-submit');
     submitBtn?.setAttribute('disabled', '');
@@ -354,12 +418,12 @@ export async function renderOperationsCode(host, {
         score: state.selfScore ?? 0,
         total: totalScoreVal,
         title: '本题已判分',
-        detail: '右侧已展开逐项反馈，可对照参考答案查看。',
+        detail: '代码区已逐项标注对错，可点「查看参考答案」对照。',
       });
     } catch (e) {
       submitBtn?.removeAttribute('disabled');
       stripBtn?.removeAttribute('disabled');
-      alert(e.message);
+      await notifySubmitResult({ title: '提交失败', detail: e.message || String(e) });
     }
   });
 
@@ -371,7 +435,7 @@ export async function renderOperationsCode(host, {
   // ── reset：弹两种模式 —— 1) 保留作答仅清状态；2) 完全清空 ──
   host.querySelector('.bk-op-strip-reset')?.addEventListener('click', async () => {
     if (examMode && state.submitted) {
-      alert('考试模式不允许撤销已提交的作答');
+      await notifySubmitResult({ title: '无法重置', detail: '考试模式不允许撤销已提交的作答。' });
       return;
     }
     const mode = await pickResetMode({
@@ -382,13 +446,21 @@ export async function renderOperationsCode(host, {
     if (!mode) return;
     try {
       await API.opSessionReset(state.sessionId, mode);
+      // 阻止 beforeunload 的 autosave flush 把旧的 state.blanks 写回，
+      // 否则后端刚清掉的草稿会被覆盖回去。
+      host.__bkPushDraft = async () => {};
       window.location.reload();
     } catch (e) { alert('重置失败：' + (e.message || e)); }
   });
 
   // ── discard draft ─────────────────────────────────────────
   host.querySelector('.bk-op-discard')?.addEventListener('click', async () => {
-    if (!confirm('确认放弃此次作答？\n\n已填写的草稿会被删除，操作不可撤销。')) return;
+    const okDiscard = await confirmModal({
+      title: '确认放弃此次作答？',
+      message: '已填写的草稿会被删除，操作不可撤销。',
+      confirmLabel: '放弃作答',
+    });
+    if (!okDiscard) return;
     try {
       await API.opSessionDiscard(state.sessionId);
       window.location.hash = examMode ? examBackHash : '#/ops';
@@ -476,12 +548,24 @@ export async function renderOperationsCode(host, {
       ${as ? `<span class="small">得分 <b>${as.earned}</b> / ${as.total} 分</span>` : ''}
     `;
     bar.style.display = 'flex';
-    // 锁定已提交后的输入
+    // 锁定已提交后的输入（兼容模板内联输入框与 legacy 整段 textarea 两种形态）
     cellEls.forEach((el) => {
-      el.querySelectorAll('textarea.bk-jcell-blank').forEach((t) => t.setAttribute('readonly', ''));
+      el.querySelectorAll('textarea.bk-jcell-blank, textarea.bk-jcell-blank-input')
+        .forEach((t) => t.setAttribute('readonly', ''));
     });
   }
   if (state.submitted) renderAutoFeedback();
+
+  const runAllBtn = host.querySelector('.bk-op-runall');
+  const interruptBtn = host.querySelector('.bk-op-interrupt');
+  function setRunAllState(mode) {
+    if (!runAllBtn) return;
+    runAllBtn.classList.toggle('is-running', mode === 'running');
+    runAllBtn.setAttribute('aria-busy', mode === 'running' ? 'true' : 'false');
+    runAllBtn.textContent = mode === 'running' ? '⏳ 运行中…' : '▶▶ 全部运行';
+    if (mode === 'ready') runAllBtn.removeAttribute('disabled');
+    else runAllBtn.setAttribute('disabled', '');
+  }
 
   // ── WS ───────────────────────────────────────────────────
   const ws = openOpWS(state.sessionId, {
@@ -489,12 +573,18 @@ export async function renderOperationsCode(host, {
       state.kernelReady = true;
       host.querySelector('.bk-op-kstatus').innerHTML =
         `<span class="bk-jcell-status is-idle"></span>Kernel ● Ready`;
-      host.querySelector('.bk-op-runall').removeAttribute('disabled');
+      setRunAllState('ready');
     },
     stream: (m) => cellByid(m.cell_id)?.$appendStream(m.text, m.stream === 'stderr'),
     display: (m) => cellByid(m.cell_id)?.$appendDisplay(m.mime, m.data),
     execute_result: (m) => cellByid(m.cell_id)?.$appendDisplay(m.mime, m.data),
     error: (m) => {
+      if (!m.cell_id) {
+        state.kernelError = m.evalue || m.ename || 'Kernel 初始化失败';
+        host.querySelector('.bk-op-kstatus').innerHTML =
+          `<span class="bk-jcell-status is-error"></span>${escapeHtml(state.kernelError)}`;
+        return;
+      }
       cellByid(m.cell_id)?.$appendError(m);
       cellByid(m.cell_id)?.$setStatus('error');
     },
@@ -504,13 +594,20 @@ export async function renderOperationsCode(host, {
     },
     batch_done: () => {
       state.busy = false;
-      host.querySelector('.bk-op-runall').removeAttribute('disabled');
-      host.querySelector('.bk-op-interrupt').setAttribute('disabled', '');
+      setRunAllState('ready');
+      interruptBtn?.setAttribute('disabled', '');
+    },
+    interrupted: () => {
+      state.busy = false;
+      setRunAllState('ready');
+      interruptBtn?.setAttribute('disabled', '');
     },
     close: () => {
+      state.busy = false;
       host.querySelector('.bk-op-kstatus').innerHTML =
-        `<span class="bk-jcell-status is-error"></span>Kernel 已断开`;
-      host.querySelector('.bk-op-runall').setAttribute('disabled', '');
+        `<span class="bk-jcell-status is-error"></span>${escapeHtml(state.kernelError || 'Kernel 已断开')}`;
+      setRunAllState('disabled');
+      interruptBtn?.setAttribute('disabled', '');
     },
   });
 
@@ -522,8 +619,8 @@ export async function renderOperationsCode(host, {
   function runUpTo(lastIdx) {
     if (!state.kernelReady || state.busy) return;
     state.busy = true;
-    host.querySelector('.bk-op-runall').setAttribute('disabled', '');
-    host.querySelector('.bk-op-interrupt').removeAttribute('disabled');
+    setRunAllState('running');
+    interruptBtn?.removeAttribute('disabled');
     const payload = cellEls.slice(0, lastIdx + 1).map((el) => {
       el.$clearOutput();
       el.$setStatus('busy');
@@ -533,7 +630,8 @@ export async function renderOperationsCode(host, {
     catch (e) {
       state.busy = false;
       alert('无法发送：' + e.message);
-      host.querySelector('.bk-op-runall').removeAttribute('disabled');
+      setRunAllState('ready');
+      interruptBtn?.setAttribute('disabled', '');
     }
   }
 

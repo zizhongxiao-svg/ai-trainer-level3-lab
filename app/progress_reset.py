@@ -94,49 +94,74 @@ def _has_active_ops_exam(conn, user_id: int) -> bool:
 def reset_theory(
     kp_id: Optional[int] = Query(None, ge=1),
     section_id: Optional[int] = Query(None, ge=1),
+    q_type: Optional[str] = Query(None, pattern="^(single|multi|judge)$"),
+    keep_corrected: bool = Query(False),
     user: dict = Depends(get_current_user),
 ):
+    """清空理论练习状态。q_type 可缩小到单一题型；keep_corrected=1 时把
+    范围内当前"已订正"的题号存档（user_corrected_archive），订正筛选不丢。"""
     if kp_id is not None and section_id is not None:
         raise HTTPException(422, "kp_id 与 section_id 不可同时指定")
     uid = user["id"]
     with get_db() as conn:
+        # 题目范围条件（作用于 question_id），各条件可叠加
+        conds: list[str] = []
+        params: list = []
         if kp_id is not None:
-            kp = conn.execute(
+            if not conn.execute(
                 "SELECT id FROM knowledge_points WHERE id=?", (kp_id,)
-            ).fetchone()
-            if not kp:
+            ).fetchone():
                 raise HTTPException(404, "知识点不存在")
-            cur = conn.execute(
-                """
-                DELETE FROM user_answers
-                WHERE user_id=? AND question_id IN (
-                    SELECT question_id FROM question_kp_map WHERE kp_id=?
-                )
-                """,
-                (uid, kp_id),
+            conds.append(
+                "question_id IN (SELECT question_id FROM question_kp_map WHERE kp_id=?)"
             )
+            params.append(kp_id)
         elif section_id is not None:
-            sec = conn.execute(
+            if not conn.execute(
                 "SELECT id FROM curriculum_sections WHERE id=?", (section_id,)
-            ).fetchone()
-            if not sec:
+            ).fetchone():
                 raise HTTPException(404, "章节不存在")
-            cur = conn.execute(
-                """
-                DELETE FROM user_answers
-                WHERE user_id=? AND question_id IN (
+            conds.append(
+                """question_id IN (
                     SELECT m.question_id FROM question_kp_map m
                     JOIN knowledge_points kp ON kp.id = m.kp_id
                     WHERE kp.section_id=?
-                )
-                """,
-                (uid, section_id),
+                )"""
             )
-        else:
+            params.append(section_id)
+        if q_type is not None:
+            conds.append("question_id IN (SELECT id FROM questions WHERE type=?)")
+            params.append(q_type)
+        scope = "".join(f" AND {c}" for c in conds)
+
+        archived = 0
+        if keep_corrected:
+            # 范围内"已订正"（至少错过一次且最近一次答对）→ 存档
             cur = conn.execute(
-                "DELETE FROM user_answers WHERE user_id=?", (uid,)
+                f"""
+                INSERT OR IGNORE INTO user_corrected_archive (user_id, question_id)
+                SELECT ua.user_id, ua.question_id FROM user_answers ua
+                WHERE ua.user_id=?{scope}
+                GROUP BY ua.question_id
+                HAVING SUM(CASE WHEN ua.is_correct=0 THEN 1 ELSE 0 END) > 0
+                   AND (SELECT ua2.is_correct FROM user_answers ua2
+                        WHERE ua2.user_id=ua.user_id AND ua2.question_id=ua.question_id
+                        ORDER BY ua2.answered_at DESC, ua2.id DESC LIMIT 1) = 1
+                """,
+                (uid, *params),
             )
-        return {"deleted": cur.rowcount}
+            archived = cur.rowcount
+        else:
+            # 彻底重置：范围内的订正存档一并清掉
+            conn.execute(
+                f"DELETE FROM user_corrected_archive WHERE user_id=?{scope}",
+                (uid, *params),
+            )
+
+        cur = conn.execute(
+            f"DELETE FROM user_answers WHERE user_id=?{scope}", (uid, *params)
+        )
+        return {"deleted": cur.rowcount, "archived_corrected": archived}
 
 
 # ── 操作题 ─────────────────────────────────────────────────────────────────

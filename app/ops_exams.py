@@ -238,7 +238,7 @@ def _latest_submitted_op_session(conn, user_id: int, op_id: int, exam_start: str
         SELECT * FROM op_sessions
         WHERE user_id=? AND operation_id=?
           AND submitted_at IS NOT NULL
-          AND started_at >= ?
+          AND submitted_at >= ?
         ORDER BY submitted_at DESC
         LIMIT 1
         """,

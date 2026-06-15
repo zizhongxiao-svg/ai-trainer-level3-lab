@@ -10,6 +10,14 @@ export function openOpWS(sessionId, handlers = {}) {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const url = `${scheme}://${location.host}${BASE}/ws/op/${sessionId}?token=${token}`;
   const ws = new WebSocket(url);
+  let heartbeat = null;
+
+  function stopHeartbeat() {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  }
 
   ws.addEventListener('message', (ev) => {
     let msg;
@@ -18,8 +26,18 @@ export function openOpWS(sessionId, handlers = {}) {
     if (h) h(msg);
     if (handlers.any) handlers.any(msg);
   });
-  ws.addEventListener('open', () => handlers.open && handlers.open());
-  ws.addEventListener('close', (ev) => handlers.close && handlers.close(ev));
+  ws.addEventListener('open', () => {
+    heartbeat = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 30000);
+    handlers.open && handlers.open();
+  });
+  ws.addEventListener('close', (ev) => {
+    stopHeartbeat();
+    handlers.close && handlers.close(ev);
+  });
   ws.addEventListener('error', (ev) => handlers.error && handlers.error(ev));
 
   return {
@@ -35,6 +53,7 @@ export function openOpWS(sessionId, handlers = {}) {
     },
     interrupt() { this.send({ type: 'interrupt' }); },
     close() {
+      stopHeartbeat();
       try { ws.close(1000); } catch (_) {}
     },
     get readyState() { return ws.readyState; },

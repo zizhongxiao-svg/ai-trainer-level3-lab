@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.db import get_db
-from app.ai_grading import grade_doc_answer_with_ai
+from app.ai_grading import grade_doc_answer_with_ai, grade_report_with_ai
 from app.edition import AIGradingDisabled
 from app.ops_unlock import require_ops_unlocked
 
@@ -54,6 +54,29 @@ def _normalize_given_code(code: str) -> str:
         lines = [ln.lstrip() for ln in lines]
         return "\n".join(lines)
     return textwrap.dedent(code)
+
+
+def _segment_opens_block(segment: dict | None) -> bool:
+    if not segment:
+        return False
+    if segment.get("type") == "blank":
+        source = segment.get("template") or segment.get("answer") or ""
+    else:
+        source = segment.get("code") or ""
+    return str(source).rstrip().endswith(":")
+
+
+def _segment_starts_indented(segment: dict | None) -> bool:
+    if not segment:
+        return False
+    if segment.get("type") == "blank":
+        source = segment.get("template") or segment.get("answer") or ""
+    else:
+        source = segment.get("code") or ""
+    for line in str(source).splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            return len(line) > len(line.lstrip())
+    return False
 
 
 def _normalize_answer_for_match(s: str) -> str:
@@ -143,6 +166,45 @@ class _CanonicalNameAst(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=self._names[node.id], ctx=node.ctx), node)
 
 
+class _AliasNameAst(ast.NodeTransformer):
+    """把同题前面填空中已确认的用户变量名替换为参考答案变量名。"""
+
+    def __init__(self, aliases: dict[str, str]) -> None:
+        self._aliases = aliases
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id in self._aliases:
+            return ast.copy_location(ast.Name(id=self._aliases[node.id], ctx=node.ctx), node)
+        return node
+
+
+# open() 的文本读模式 'r'/'rt'/'tr' 是默认值，写或不写语义相同。
+# 复习题 PDF 部分参考答案带 'r'（如 3.2.4 `open('labels.txt','r')`），
+# 系统旧答案不带；归一化时去掉默认 mode，使两种写法判为同一答案。
+_OPEN_DEFAULT_MODES = {"r", "rt", "tr"}
+
+
+def _is_default_open_mode(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value in _OPEN_DEFAULT_MODES
+
+
+class _DefaultArgAst(ast.NodeTransformer):
+    """去掉 open(...) 调用里冗余的默认文本读模式，使等价写法 AST 一致。"""
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Name) and node.func.id == "open":
+            # 仅处理 open(path, 'r') 这种恰好两个位置参数的形式，
+            # 多于两个时删第二个会移位 buffering 等参数，故不动。
+            if len(node.args) == 2 and _is_default_open_mode(node.args[1]):
+                node.args = node.args[:1]
+            node.keywords = [
+                kw for kw in node.keywords
+                if not (kw.arg == "mode" and _is_default_open_mode(kw.value))
+            ]
+        return node
+
+
 def _collect_target_names(tree: ast.AST) -> set[str]:
     names: set[str] = set()
 
@@ -186,7 +248,7 @@ def _collect_target_names(tree: ast.AST) -> set[str]:
     return names
 
 
-def _canonical_ast_dump(code: str) -> str | None:
+def _canonical_ast_dump(code: str, name_aliases: dict[str, str] | None = None) -> str | None:
     if code is None:
         return None
     cleaned = textwrap.dedent(str(code).translate(_CH_PUNCT_TABLE)).strip()
@@ -195,20 +257,93 @@ def _canonical_ast_dump(code: str) -> str | None:
     try:
         tree = ast.parse(cleaned)
     except SyntaxError:
-        return None
+        # 块首填空（with/for/if… 以 ':' 结尾）单独无法解析，补一个 pass 体再试，
+        # 使 `with open('x') as f:` 这类只填一行的 blank 也能走 AST 等价比较。
+        if cleaned.rstrip().endswith(":"):
+            try:
+                tree = ast.parse(cleaned + "\n    pass")
+            except SyntaxError:
+                return None
+        else:
+            return None
+    if name_aliases:
+        tree = _AliasNameAst(name_aliases).visit(tree)
+        ast.fix_missing_locations(tree)
+    tree = _DefaultArgAst().visit(tree)
     tree = _CanonicalNameAst(_collect_target_names(tree)).visit(tree)
     ast.fix_missing_locations(tree)
     return ast.dump(tree, include_attributes=False)
 
 
-def _answers_equivalent(user_val: str, ref_val: str) -> bool:
+def _binding_names_in_order(code: str) -> list[str]:
+    """按代码中绑定变量出现顺序提取名称，用于跨填空建立变量别名。"""
+    if code is None:
+        return []
+    cleaned = textwrap.dedent(str(code).translate(_CH_PUNCT_TABLE)).strip()
+    if not cleaned:
+        return []
+    try:
+        tree = ast.parse(cleaned)
+    except SyntaxError:
+        return []
+
+    names: list[str] = []
+
+    def add_target(target: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            if target.id not in _AST_NAME_KEEP and not keyword.iskeyword(target.id):
+                names.append(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                add_target(elt)
+        elif isinstance(target, (ast.Subscript, ast.Attribute)):
+            base = target.value
+            while isinstance(base, (ast.Subscript, ast.Attribute)):
+                base = base.value
+            if (
+                isinstance(base, ast.Name)
+                and base.id not in _AST_NAME_KEEP
+                and not keyword.iskeyword(base.id)
+            ):
+                names.append(base.id)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = getattr(node, "targets", None) or [node.target]
+            for target in targets:
+                add_target(target)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars:
+                    add_target(item.optional_vars)
+
+    return names
+
+
+def _binding_aliases(user_val: str, ref_val: str) -> dict[str, str]:
+    user_names = _binding_names_in_order(user_val)
+    ref_names = _binding_names_in_order(ref_val)
+    if not user_names or len(user_names) != len(ref_names):
+        return {}
+    return {
+        user_name: ref_name
+        for user_name, ref_name in zip(user_names, ref_names)
+        if user_name != ref_name
+    }
+
+
+def _answers_equivalent(
+    user_val: str,
+    ref_val: str,
+    name_aliases: dict[str, str] | None = None,
+) -> bool:
     """代码填空等价判断：归一化精确匹配优先，完整 Python 片段再尝试 AST 等价。"""
     if not str(user_val or "").strip() or not str(ref_val or "").strip():
         return False
     if _normalize_answer_for_match(user_val) == _normalize_answer_for_match(ref_val):
         return True
 
-    user_ast = _canonical_ast_dump(user_val)
+    user_ast = _canonical_ast_dump(user_val, name_aliases)
     ref_ast = _canonical_ast_dump(ref_val)
     return bool(user_ast and ref_ast and user_ast == ref_ast)
 
@@ -219,7 +354,11 @@ def _sanitize_code_segments(segments: list) -> list:
     for s in segments or []:
         s2 = dict(s)
         if s2.get("type") == "given":
-            s2["code"] = _normalize_given_code(s2.get("code", ""))
+            prev = out[-1] if out else None
+            if _segment_opens_block(prev) or _segment_starts_indented(prev):
+                s2["code"] = (s2.get("code", "") or "").translate(_CH_PUNCT_TABLE)
+            else:
+                s2["code"] = _normalize_given_code(s2.get("code", ""))
         elif s2.get("type") == "blank" and "answer" in s2:
             # answer 也顺手清洗标点，方便前端"查看参考答案"显示
             s2["answer"] = (s2.get("answer") or "").translate(_CH_PUNCT_TABLE)
@@ -239,13 +378,17 @@ def _compute_blank_results(op: dict, blanks_draft: dict) -> dict:
         return results
     segs = op.get("code_segments") or []
     idx = 0
+    name_aliases: dict[str, str] = {}
     for s in segs:
         if s.get("type") != "blank":
             continue
         user_val = (blanks_draft or {}).get(str(idx), "")
         ref_val = s.get("answer", "")
         if ref_val:
-            results[str(idx)] = _answers_equivalent(user_val, ref_val)
+            ok = _answers_equivalent(user_val, ref_val, name_aliases)
+            results[str(idx)] = ok
+            if ok:
+                name_aliases.update(_binding_aliases(user_val, ref_val))
         idx += 1
     return results
 
@@ -343,6 +486,10 @@ class DraftReq(BaseModel):
     rubric_checks: Optional[dict] = None
 
 
+class ReportGradeReq(BaseModel):
+    sections: dict
+
+
 class SubmitReq(BaseModel):
     # 代码题忽略；自动按 blank 对错算分。文档题可选；缺省时按 rubric_checks 命中分计。
     self_score: Optional[float] = Field(None, ge=0)
@@ -400,6 +547,16 @@ def _op_meta(op: dict, hide_answers: bool = False) -> dict:
                 solution_guide = sol_md.read_text(encoding="utf-8")
         except OSError:
             pass
+    # 报告小作文训练：练习模式连范文一起下发（与"查看参考答案"同口径）；考试中不下发
+    report_training = None
+    rt = op.get("report_training")
+    if rt and not hide_answers:
+        report_training = {
+            "prompt": rt.get("prompt"),
+            "rubric": rt.get("rubric") or [],
+            "reference": rt.get("reference") or {},
+        }
+
     return {
         "id": op["id"],
         "title": op["title"],
@@ -414,6 +571,7 @@ def _op_meta(op: dict, hide_answers: bool = False) -> dict:
         "code_segments": code_segments,
         "blank_count": op.get("blank_count", 0),
         "solution_guide": solution_guide,
+        "report_training": report_training,
     }
 
 
@@ -526,6 +684,16 @@ def reset_session(
 
         if was_submitted:
             # 撤销提交时可能有残留的未提交 sibling，先删除避免唯一索引冲突
+            # 历史实操考试成绩可能仍引用 sibling，先解绑外键再删除草稿行。
+            conn.execute(
+                """UPDATE ops_exam_grades SET op_session_id=NULL
+                   WHERE op_session_id IN (
+                       SELECT id FROM op_sessions
+                       WHERE user_id=? AND operation_id=?
+                         AND submitted_at IS NULL AND id<>?
+                   )""",
+                (user["id"], row["operation_id"], session_id),
+            )
             conn.execute(
                 """DELETE FROM op_sessions
                    WHERE user_id=? AND operation_id=?
@@ -668,6 +836,39 @@ def save_draft(session_id: int, req: DraftReq, user=Depends(get_current_user)):
     return {"ok": True, "saved_at": datetime.now().isoformat()}
 
 
+@router.post("/{session_id}/report-grade")
+def grade_report(session_id: int, req: ReportGradeReq, user=Depends(get_current_user)):
+    """实训练习：2.2.x 代码题"测试报告小作文"AI 判分。不落库、不计入题目得分。"""
+    require_ops_unlocked(user)
+    with get_db() as conn:
+        row = conn.execute("SELECT user_id, operation_id FROM op_sessions WHERE id=?",
+                           (session_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "会话不存在")
+        if row["user_id"] != user["id"]:
+            raise HTTPException(403, "无权访问该会话")
+
+    op = _load_op(row["operation_id"])
+    if not op:
+        raise HTTPException(404, "关联操作题已失效")
+    rt = op.get("report_training")
+    if not rt:
+        raise HTTPException(400, "本题没有测试报告小作文训练")
+    sections = {str(k): str(v or "") for k, v in (req.sections or {}).items()}
+    if not any(v.strip() for v in sections.values()):
+        raise HTTPException(400, "请先写点内容再判分")
+
+    try:
+        result = grade_report_with_ai(
+            session_id=session_id, operation=op, sections=sections)
+    except AIGradingDisabled:
+        raise HTTPException(503, "本版本未启用 AI 自动判卷，请对照参考答案自行核对。")
+    except Exception as exc:
+        raise HTTPException(502, f"AI 判分失败：{exc}")
+    result["reference"] = rt.get("reference") or {}
+    return result
+
+
 @router.post("/{session_id}/submit")
 def submit_session(session_id: int, req: SubmitReq, user=Depends(get_current_user)):
     require_ops_unlocked(user)
@@ -708,7 +909,7 @@ def submit_session(session_id: int, req: SubmitReq, user=Depends(get_current_use
         # 代码题：完全按 auto_score 落库，self_score 字段忽略客户端传值。
         final_score = float(auto_score["earned"]) if auto_score else 0.0
     else:
-        # 文档题（实训模式）：copilot AI 同步判卷，不再要求自评分。
+        # 文档题（实训模式）：AI 同步判卷；社区版未启用 AI 判卷时降级为自行核对。
         try:
             result = grade_doc_answer_with_ai(
                 exam_session_id=session_id,
@@ -718,19 +919,19 @@ def submit_session(session_id: int, req: SubmitReq, user=Depends(get_current_use
         except AIGradingDisabled:
             final_score = 0.0
             ai_grading_payload = {
-                "status": "disabled",
+                "status": "manual",
                 "score": 0.0,
                 "max_score": total_score,
                 "rubric_scores": [],
                 "feedback": {
-                    "summary": "本版本未启用 AI 自动判卷，请对照下方参考答案与评分细则自行核对得分。",
+                    "summary": "本版本未启用 AI 自动判卷，请对照参考答案自行核对。",
                     "confidence": "n/a",
                 },
                 "model": "disabled",
                 "reasoning_effort": "none",
                 "raw_output": "",
             }
-            auto_score = {"earned": 0.0, "total": total_score, "ai_disabled": True}
+            auto_score = {"earned": 0.0, "total": total_score, "ai_graded": False, "manual": True}
         except Exception as exc:
             raise HTTPException(502, f"AI 判卷失败：{exc}")
         else:

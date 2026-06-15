@@ -50,11 +50,13 @@ export function renderQuestionCard(q, options = {}) {
     </div>
   ` : '';
 
+  const showAllToggle = (mode === 'exam' && isMulti);
   wrap.innerHTML = `
     <div class="bk-q-head">
       <span class="bk-q-pill">${idx ? `第 ${idx} 题` : ''}${total ? ` / ${total}` : ''}</span>
       <span class="bk-q-pill bk-q-pill-soft">${typeLabel}${isMulti ? ' · 多选' : ''}</span>
       ${q.category ? `<span class="bk-q-pill bk-q-pill-soft">${escHtml(q.category)}</span>` : ''}
+      ${showAllToggle ? `<button type="button" class="bk-btn bk-btn-xs bk-q-allpick" data-allpick>全选</button>` : ''}
     </div>
     <div class="bk-q-text">${escHtml(q.text)}</div>
     <div class="bk-q-opts">${optionsHtml}</div>
@@ -62,6 +64,24 @@ export function renderQuestionCard(q, options = {}) {
   `;
 
   if (mode === 'exam') {
+    const allLabels = q.options.map(o => String(o.label));
+    const syncAllToggle = () => {
+      const btn = wrap.querySelector('[data-allpick]');
+      if (!btn) return;
+      const allPicked = allLabels.length > 0 && allLabels.every(l => selected.has(l));
+      btn.textContent = allPicked ? '清空' : '全选';
+      btn.classList.toggle('is-on', allPicked);
+    };
+    const emitChange = () => {
+      wrap.querySelectorAll('.bk-opt').forEach(n => {
+        n.classList.toggle('is-picked', selected.has(n.dataset.label));
+      });
+      syncAllToggle();
+      wrap.dispatchEvent(new CustomEvent('bk-cell-change', {
+        bubbles: true,
+        detail: { qid: q.id, selected: [...selected].sort() },
+      }));
+    };
     wrap.querySelectorAll('.bk-opt').forEach(node => {
       node.addEventListener('click', () => {
         const lab = node.dataset.label;
@@ -70,16 +90,20 @@ export function renderQuestionCard(q, options = {}) {
         } else {
           selected.clear(); selected.add(lab);
         }
-        // Rerender opt states
-        wrap.querySelectorAll('.bk-opt').forEach(n => {
-          n.classList.toggle('is-picked', selected.has(n.dataset.label));
-        });
-        wrap.dispatchEvent(new CustomEvent('bk-cell-change', {
-          bubbles: true,
-          detail: { qid: q.id, selected: [...selected].sort() },
-        }));
+        emitChange();
       });
     });
+    if (showAllToggle) {
+      const btn = wrap.querySelector('[data-allpick]');
+      btn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const allPicked = allLabels.every(l => selected.has(l));
+        if (allPicked) selected.clear();
+        else allLabels.forEach(l => selected.add(l));
+        emitChange();
+      });
+      syncAllToggle();
+    }
   }
 
   return wrap;

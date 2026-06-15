@@ -107,6 +107,7 @@ async def op_ws(
                 continue
 
             mtype = msg.get("type")
+            pool.touch(kernel_id)
 
             if mtype == "execute":
                 cells = msg.get("cells") or []

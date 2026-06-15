@@ -330,6 +330,42 @@ export async function withSubmittingOverlay(asyncFn, { title = '正在提交', d
   }
 }
 
+// 页内确认弹窗，代替原生 confirm()。Firefox 在用户勾选"阻止此页面再弹出
+// 对话框"后会让 confirm() 静默返回 false（刷新也不恢复），导致提交等按钮
+// "点了没反应"。DOM 弹窗不受该机制影响。返回 Promise<boolean>。
+export function confirmModal({ title = '请确认', message = '', confirmLabel = '确认', cancelLabel = '取消' } = {}) {
+  return new Promise((resolve) => {
+    const mask = document.createElement('div');
+    mask.className = 'bk-reset-modal-mask';
+    mask.innerHTML = `
+      <div class="bk-reset-modal" role="dialog" aria-modal="true">
+        <div class="bk-reset-modal-hd">${escapeHtml(title)}</div>
+        <div class="bk-reset-modal-bd" style="white-space:pre-line">${escapeHtml(message)}</div>
+        <div class="bk-reset-modal-ft">
+          <button class="bk-btn bk-btn-ghost bk-btn-sm" data-act="cancel">${escapeHtml(cancelLabel)}</button>
+          <button class="bk-btn bk-btn-primary bk-btn-sm" data-act="ok">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    function cleanup(v) {
+      mask.removeEventListener('click', onMask);
+      document.removeEventListener('keydown', onKey);
+      mask.remove();
+      resolve(v);
+    }
+    function onMask(e) { if (e.target === mask) cleanup(false); }
+    function onKey(e) {
+      if (e.key === 'Escape') cleanup(false);
+      else if (e.key === 'Enter') cleanup(true);
+    }
+    mask.addEventListener('click', onMask);
+    document.addEventListener('keydown', onKey);
+    mask.querySelector('[data-act="cancel"]').addEventListener('click', () => cleanup(false));
+    mask.querySelector('[data-act="ok"]').addEventListener('click', () => cleanup(true));
+    document.body.appendChild(mask);
+    mask.querySelector('[data-act="ok"]').focus();
+  });
+}
+
 export function pickResetMode({ submitted = false, keepHint = '', clearHint = '' } = {}) {
   return new Promise((resolve) => {
     const mask = document.createElement('div');

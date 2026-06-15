@@ -14,11 +14,18 @@ export const auth = {
   clear() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); },
 };
 
+// 401 from these endpoints means "credentials submitted are wrong",
+// not "session expired" — let the caller see the real detail.
+const AUTH_SUBMIT_PATHS = ['/api/auth/login', '/api/auth/register'];
+function isAuthSubmitPath(path) {
+  return AUTH_SUBMIT_PATHS.some(p => path === p || path.startsWith(p + '?'));
+}
+
 export async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   if (auth.token) headers['Authorization'] = 'Bearer ' + auth.token;
   const resp = await fetch(BASE + path, { ...opts, headers });
-  if (resp.status === 401) {
+  if (resp.status === 401 && !isAuthSubmitPath(path)) {
     auth.clear();
     window.location.hash = '#/login';
     throw new Error('未登录');
@@ -41,7 +48,7 @@ export async function apiBlob(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (auth.token) headers['Authorization'] = 'Bearer ' + auth.token;
   const resp = await fetch(BASE + path, { ...opts, headers });
-  if (resp.status === 401) {
+  if (resp.status === 401 && !isAuthSubmitPath(path)) {
     auth.clear();
     window.location.hash = '#/login';
     throw new Error('未登录');
@@ -69,9 +76,13 @@ export const API = {
     const qs = new URLSearchParams(params).toString();
     return api(`/api/curriculum/questions${qs ? '?' + qs : ''}`);
   },
+  flagQuestion: (qid) => api(`/api/curriculum/questions/${qid}/flag`, { method: 'POST' }),
+  unflagQuestion: (qid) => api(`/api/curriculum/questions/${qid}/flag`, { method: 'DELETE' }),
   dashboard: () => api('/api/dashboard/summary'),
   submitAnswer: (qid, selected) =>
     api('/api/answers', { method: 'POST', body: JSON.stringify({ question_id: qid, selected }) }),
+  batchSubmitAnswers: (items) =>
+    api('/api/answers/batch', { method: 'POST', body: JSON.stringify({ answers: items }) }),
   stats: () => api('/api/stats'),
   adminStats: () => api('/api/admin/stats'),
   examStart: () => api('/api/exams/start', { method: 'POST' }),
@@ -110,6 +121,8 @@ export const API = {
     api(`/api/operations/sessions/${sid}/reset${mode ? '?mode=' + encodeURIComponent(mode) : ''}`, { method: 'POST' }),
   opSessionSubmit: (sid, body) =>
     api(`/api/operations/sessions/${sid}/submit`, { method: 'POST', body: JSON.stringify(body) }),
+  opReportGrade: (sid, sections) =>
+    api(`/api/operations/sessions/${sid}/report-grade`, { method: 'POST', body: JSON.stringify({ sections }) }),
   // Practical (ops) mock exam
   opsExamBlueprint: () => api('/api/ops-exams/blueprint'),
   opsExamStart: () => api('/api/ops-exams/start', { method: 'POST', body: '{}' }),
@@ -118,10 +131,12 @@ export const API = {
   opsExamSubmit: (sid) => api(`/api/ops-exams/${sid}/submit`, { method: 'POST' }),
   opsExamList: () => api('/api/ops-exams'),
   // Progress reset
-  resetTheory: ({ kp_id, section_id } = {}) => {
+  resetTheory: ({ kp_id, section_id, q_type, keep_corrected } = {}) => {
     const qs = new URLSearchParams();
     if (kp_id) qs.set('kp_id', kp_id);
     if (section_id) qs.set('section_id', section_id);
+    if (q_type) qs.set('q_type', q_type);
+    if (keep_corrected) qs.set('keep_corrected', '1');
     const s = qs.toString();
     return api(`/api/me/progress/theory${s ? '?' + s : ''}`, { method: 'DELETE' });
   },

@@ -33,7 +33,11 @@ function assembleTemplate(tpl, values) {
 
 // Reverse of assembleTemplate: given an assembled string and the template,
 // extract the per-input substrings. Returns null if the assembled doesn't
-// align (e.g., user-pasted free text). Greedy left-to-right.
+// align (e.g., user-pasted free text).
+//
+// Anchoring: prefix to start, trailing part to end. Without end-anchoring,
+// template "print(_____)" + assembled "print(data.head())" would greedily
+// match the inner ')' of head() and clip the last char off the input.
 function deriveInputs(tpl, assembled) {
   const { parts, blankCount } = splitTemplate(tpl);
   if (blankCount === 0) return [];
@@ -44,14 +48,21 @@ function deriveInputs(tpl, assembled) {
     if (!assembled.startsWith(parts[0])) return null;
     cursor = parts[0].length;
   }
+  const tail = parts[blankCount];
+  let tailStart = assembled.length;
+  if (tail) {
+    if (!assembled.endsWith(tail)) return null;
+    tailStart = assembled.length - tail.length;
+    if (tailStart < cursor) return null;
+  }
   for (let i = 0; i < blankCount; i++) {
-    const next = parts[i + 1];
-    if (!next) {
-      out.push(assembled.substring(cursor));
-      cursor = assembled.length;
+    if (i === blankCount - 1) {
+      out.push(assembled.substring(cursor, tailStart));
+      cursor = tailStart + (tail ? tail.length : 0);
     } else {
+      const next = parts[i + 1];
       const idx = assembled.indexOf(next, cursor);
-      if (idx < 0) return null;
+      if (idx < 0 || idx > tailStart) return null;
       out.push(assembled.substring(cursor, idx));
       cursor = idx + next.length;
     }
@@ -82,6 +93,14 @@ function suggestedInputWidths(tpl, seg, initialValues) {
   });
 }
 
+export function blankComment(seg = {}) {
+  const hint = String(seg.hint || '').trim() || '填空';
+  const hasScore = /\d+\s*分/.test(hint);
+  const points = Number(seg.points);
+  const score = !hasScore && Number.isFinite(points) && points > 0 ? ` ${points}分` : '';
+  return `# ${hint}${score}`;
+}
+
 function firstCodeLine(code = '') {
   return String(code).split('\n').find((line) => line.trim() && !line.trimStart().startsWith('#')) || '';
 }
@@ -99,7 +118,11 @@ function startsAsContinuation(code = '') {
   const line = firstCodeLine(code);
   if (!line) return false;
   const trimmed = line.trimStart();
-  return /^[)\]}.,&|+*/]/.test(trimmed) || (line.length > trimmed.length && !trimmed.startsWith('#'));
+  // A real continuation begins with a closing bracket / operator / dot (e.g.
+  // a chained `.method()` or a closing `)`). Plain indentation is NOT a
+  // continuation — lines inside a for/if block are indented but are their own
+  // statements, so joining them would drop newlines and suppress comments.
+  return /^[)\]}.,&|+*/]/.test(trimmed);
 }
 
 function shouldJoinInlineSegments(prev, next) {
@@ -176,8 +199,8 @@ export function createCell(opts) {
         tplLine.appendChild(span);
       }
       if (i < parts.length - 1) {
-        const inp = document.createElement('input');
-        inp.type = 'text';
+        const inp = document.createElement('textarea');
+        inp.rows = 1;
         inp.className = 'bk-jcell-blank-input';
         inp.spellcheck = false;
         inp.autocomplete = 'off';
@@ -187,12 +210,14 @@ export function createCell(opts) {
         inp.dataset.minChars = String(widthHints[i] || 0);
         inp.setAttribute('aria-label', seg.hint || '代码填空');
         inp.addEventListener('input', () => {
+          if (inp.value.includes('\n')) inp.value = inp.value.replace(/\s*\r?\n\s*/g, ' ');
           autoGrowInput(inp);
           const vals = inputs.map(x => x.value);
           const assembled = assembleTemplate(tpl, vals);
           onBlankInput && onBlankInput(seg.blankIndex, assembled);
         });
         inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); return; } // visual wrapping only
           // Tab moves to next input within same blank, then to next blank's first input
           if (e.key === 'Tab' && !e.shiftKey && i < blankCount - 1) {
             e.preventDefault();
@@ -221,10 +246,7 @@ export function createCell(opts) {
     hintMark.className = 'bk-jcell-hint-mark';
     const hintText = document.createElement('span');
     hintText.className = 'bk-jcell-hint-text';
-    const primaryHint = segments.find((s) => s.type === 'blank' && s.hint && s.hint !== '填空')?.hint
-      || segments.find((s) => s.type === 'blank' && s.hint)?.hint
-      || '填空';
-    hintText.textContent = `# ${primaryHint}`;
+    hintText.textContent = '代码填空';
     hint.appendChild(hintMark);
     hint.appendChild(hintText);
     group.appendChild(hint);
@@ -233,24 +255,38 @@ export function createCell(opts) {
     tplLine.className = 'bk-jcell-template';
     group.appendChild(tplLine);
 
+    function appendTemplateText(text) {
+      if (!text) return;
+      const span = document.createElement('span');
+      span.className = 'bk-jcell-template-text';
+      span.textContent = text;
+      tplLine.appendChild(span);
+    }
+
+    function appendBlankComment(seg, joinPrevious) {
+      if (joinPrevious) return;
+      if (tplLine.textContent && !tplLine.textContent.endsWith('\n')) {
+        appendTemplateText('\n');
+      }
+      // Indent the comment to match the blank's own indentation so a blank
+      // inside a for/if block reads like the source notebook.
+      const indent = (String(seg.template || '').match(/^[ \t]*/) || [''])[0];
+      appendTemplateText(`${indent}${blankComment(seg)}\n`);
+    }
+
     segments.forEach((seg, idx) => {
       const prev = idx > 0 ? segments[idx - 1] : null;
       const joinPrevious = idx > 0 && shouldJoinInlineSegments(prev, seg);
       if (seg.type === 'given') {
-        const span = document.createElement('span');
-        span.className = 'bk-jcell-template-text';
-        span.textContent = joinPrevious ? (seg.code || '').trimStart() : (seg.code || '');
-        tplLine.appendChild(span);
+        appendTemplateText(joinPrevious ? (seg.code || '').trimStart() : (seg.code || ''));
       } else if (seg.type === 'blank') {
+        appendBlankComment(seg, joinPrevious);
         appendTemplateFragment(tplLine, seg, group, hint, { trimLeading: joinPrevious });
       }
       if (idx < segments.length - 1) {
         const next = segments[idx + 1];
         if (!shouldJoinInlineSegments(seg, next)) {
-          const newline = document.createElement('span');
-          newline.className = 'bk-jcell-template-text';
-          newline.textContent = '\n';
-          tplLine.appendChild(newline);
+          appendTemplateText('\n');
         }
       }
     });
@@ -277,9 +313,13 @@ export function createCell(opts) {
 
       const hint = document.createElement('div');
       hint.className = 'bk-jcell-hint small';
-      hint.innerHTML = `<span class="bk-jcell-hint-mark"></span><span class="bk-jcell-hint-text">${
-        (seg.hint ? `# ${seg.hint}` : '# 填空').replace(/</g, '&lt;')
-      }</span>`;
+      const hintMark = document.createElement('span');
+      hintMark.className = 'bk-jcell-hint-mark';
+      const hintText = document.createElement('span');
+      hintText.className = 'bk-jcell-hint-text';
+      hintText.textContent = blankComment(seg);
+      hint.appendChild(hintMark);
+      hint.appendChild(hintText);
       group.appendChild(hint);
 
       const tpl = seg.template || '';
@@ -306,8 +346,8 @@ export function createCell(opts) {
           tplLine.appendChild(span);
         }
         if (i < parts.length - 1) {
-          const inp = document.createElement('input');
-          inp.type = 'text';
+          const inp = document.createElement('textarea');
+          inp.rows = 1;
           inp.className = 'bk-jcell-blank-input';
           inp.spellcheck = false;
           inp.autocomplete = 'off';
@@ -317,12 +357,14 @@ export function createCell(opts) {
           inp.dataset.minChars = String(widthHints[i] || 0);
           inp.setAttribute('aria-label', seg.hint || '代码填空');
           inp.addEventListener('input', () => {
+            if (inp.value.includes('\n')) inp.value = inp.value.replace(/\s*\r?\n\s*/g, ' ');
             autoGrowInput(inp);
             const vals = inputs.map(x => x.value);
             const assembled = assembleTemplate(tpl, vals);
             onBlankInput && onBlankInput(seg.blankIndex, assembled);
           });
           inp.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); return; } // visual wrapping only
             // Tab moves to next input within same blank, then to next blank's first input
             if (e.key === 'Tab' && !e.shiftKey && i < blankCount - 1) {
               e.preventDefault();
@@ -478,8 +520,8 @@ function autoGrowTextarea(el) {
   el.style.height = el.scrollHeight + 'px';
 }
 
-// Single-line input grows horizontally with content. We measure with a
-// hidden span that inherits the input's font.
+// Inline blanks grow horizontally until the visible code area is full; textarea
+// fields then wrap visually without injecting newlines into the submitted code.
 let _measureSpan = null;
 function autoGrowInput(el) {
   if (!_measureSpan) {
@@ -492,15 +534,27 @@ function autoGrowInput(el) {
   _measureSpan.style.font = cs.font;
   _measureSpan.style.letterSpacing = cs.letterSpacing;
   _measureSpan.textContent = el.value || el.placeholder || ' ';
-  const contentWidth = _measureSpan.offsetWidth + 12;
+  const contentWidth = _measureSpan.offsetWidth + 40;
   const minChars = Number(el.dataset.minChars || 0);
   let minWidth = 40;
   if (Number.isFinite(minChars) && minChars > 0) {
     _measureSpan.textContent = 'M'.repeat(Math.ceil(minChars));
-    minWidth = _measureSpan.offsetWidth + 12;
+    minWidth = _measureSpan.offsetWidth + 40;
   }
-  const w = Math.max(contentWidth, minWidth, 40);
+  const wantedWidth = Math.max(contentWidth, minWidth, 40);
+  const w = Math.min(wantedWidth, maxInlineBlankWidth(el));
   el.style.width = w + 'px';
+  if (el.tagName === 'TEXTAREA') {
+    el.style.height = '0px';
+    el.style.height = el.scrollHeight + 'px';
+  }
+}
+
+function maxInlineBlankWidth(el) {
+  const scroller = el.closest('.bk-jcell-blank-wrap');
+  const body = el.closest('.bk-jcell-body');
+  const width = scroller?.clientWidth || body?.clientWidth || window.innerWidth - 96;
+  return Math.max(240, width - 24);
 }
 
 function stripAnsi(s) {
